@@ -152,6 +152,15 @@ The mic positions relative to the robot center are the key inputs to the geometr
 - x/y position of each mic relative to robot center (measured, then fine-tuned)
 - Per-mic timing offset (corrects for any systematic latency differences in the analog circuitry)
 - Clap detection threshold (amplitude floor to ignore background noise)
+- Blanking window duration (~5-10ms after first trigger to suppress echo re-triggers)
+
+*** Acoustic environment
+
+Real rooms produce echoes — a single clap generates a direct-path impulse plus reflections arriving within milliseconds. Comparator circuits will trigger multiple times per clap; a blanking window (~5-10ms) after each mic's first trigger suppresses the echo re-triggers.
+
+The key insight that makes this tractable: *each clap only needs to give a coarse vote* — roughly which direction, and front-vs-back. The user can keep clapping, and the bot accumulates votes and corrects course. Individual noisy readings get averaged out over multiple claps. This is a fundamentally easier problem than single-shot precise localization.
+
+At that accuracy requirement (coarse direction + front/back), 2 mics handle left/right and a 3rd breaks front/back ambiguity. Since electret capsules are $0.50 each, start with 3 and drop to 2 if the third isn't pulling its weight.
 
 ** Laser!
 
@@ -173,6 +182,8 @@ Perhaps a smart thing to do would be to figure out all the parts, assemble them 
 
 * Implementation Sequence
 
+Note: the diwheel and the TDOA sensor system are each substantial solo projects. The independent prototyping steps (3 and 4) exist to isolate their debugging surfaces — if something breaks at integration, you want to know it's an integration problem, not a fundamental issue with either subsystem. Verify each works before combining.
+
 ** 1. Planning
 Settle the open questions before spending money on parts.
 
@@ -184,9 +195,13 @@ Settle the open questions before spending money on parts.
 *Done when:* You can write down a parts list with specific part numbers and quantities and feel confident you're not missing anything structural.
 
 ** 2. Source Parts
-Order everything. Expect to wait.
+Order everything. Expect to wait. Parts can be ordered in batches — you don't need to wait for everything before starting.
 
-- 2x DC gear motors (ideally with encoders for better drive control)
+*Batch 1 (order first):* MCU board + microphone capsules/breakout boards. These are independent of the drivetrain and can be prototyped in parallel with it. Getting the sensor work started early is valuable since TDOA is the highest-risk unknown in the project.
+
+*Batch 2:* Motors, motor controller, wheels, battery, and power components. Order once wheel size and motor specs are settled.
+
+- 2x DC gear motors *with encoders* — required for reliable dead-reckoning; without encoder feedback, motor variation and wheel slip mean the "drive a square" test produces a rough parallelogram
 - 2x wheels to fit the motors
 - 1x axle or mounting hardware to connect the two wheel/motor assemblies
 - 1x dual motor controller (TB6612FNG recommended)
@@ -232,7 +247,7 @@ Combine everything and implement the main loop.
 
 - Hear clap → compute direction → turn → drive → fire
 - Tune calibration parameters (mic positions, detection threshold)
-- Figure out the "close enough to stop" heuristic (fixed time, fixed distance estimate, or something else)
+- Figure out the "close enough to stop" heuristic — fixed time is the right v1 answer, don't let this become a rabbit hole
 
 *Done when:* You clap, the bot turns toward you, drives at you, and fires the laser. Roughly. It doesn't have to be precise — it has to be fun.
 
