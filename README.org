@@ -184,29 +184,34 @@ Perhaps a smart thing to do would be to figure out all the parts, assemble them 
 
 Note: the diwheel and the TDOA sensor system are each substantial solo projects. The independent prototyping steps (3 and 4) exist to isolate their debugging surfaces — if something breaks at integration, you want to know it's an integration problem, not a fundamental issue with either subsystem. Verify each works before combining.
 
-** 1. Planning
+** DONE Planning
+CLOSED: [2026-06-11 Thu 12:07]
 Settle the open questions before spending money on parts.
 
-- Decide on MCU platform (ESP32, Pico W, or hybrid with Pi)
-- Decide on wheel size (target: bot no wider than ~30cm total)
-- Decide on 3-mic triangle arrangement (rough positions on the chassis)
-- Sketch the power topology (battery voltage, regulator, rails)
+- [X] MCU platform: *ESP32*. Familiar enough from Arduino background, built-in WiFi for OTA/WebREPL is a bonus.
+- [X] Wheel size: target *20cm diameter*, though we can consider going higher total bot width no more than 30cm.
+- Power topology is already decided by earlier notes (2S LiPo → TB6612FNG → motors; 2S LiPo → buck converter → logic rail) — no separate sketch needed.
+- Mic placement: exact positions are calibration parameters measured after physical assembly, not a pre-sourcing decision. Only hard constraint is non-collinear, which rules itself out in any sensible layout. Settle during foam block step.
 
 *Done when:* You can write down a parts list with specific part numbers and quantities and feel confident you're not missing anything structural.
 
-** 2. Source Parts
+** [0/2] Source Parts
 Order everything. Expect to wait. Parts can be ordered in batches — you don't need to wait for everything before starting.
 
-*Batch 1 (order first):* MCU board + microphone capsules/breakout boards. These are independent of the drivetrain and can be prototyped in parallel with it. Getting the sensor work started early is valuable since TDOA is the highest-risk unknown in the project.
+*** TODO *Batch 1 (order first):
 
-*Batch 2:* Motors, motor controller, wheels, battery, and power components. Order once wheel size and motor specs are settled.
+ MCU board + microphone capsules/breakout boards. These are independent of the drivetrain and can be prototyped in parallel with it. Getting the sensor work started early is valuable and doesn't depend on the rest.
+
+- 1x MCU board (ESP32 or Pico W)
+- 3x electret microphone capsules + breakout boards or op-amp comparator circuit
+
+*** TODO Batch 2
+Motors, motor controller, wheels, battery, and power components. Order once wheel size and motor specs are settled.
 
 - 2x DC gear motors *with encoders* — required for reliable dead-reckoning; without encoder feedback, motor variation and wheel slip mean the "drive a square" test produces a rough parallelogram
 - 2x wheels to fit the motors
 - 1x axle or mounting hardware to connect the two wheel/motor assemblies
 - 1x dual motor controller (TB6612FNG recommended)
-- 1x MCU board (ESP32 or Pico W)
-- 3x electret microphone capsules + breakout boards or op-amp comparator circuit
 - 1x laser diode module (KY-008 or similar)
 - 1x NPN transistor or logic-level MOSFET for laser switching
 - 1x 2S LiPo battery + charger
@@ -215,7 +220,7 @@ Order everything. Expect to wait. Parts can be ordered in batches — you don't 
 
 *Done when:* Everything has arrived and nothing is obviously wrong or missing.
 
-** 3. Drivetrain Prototype
+** TODO Drivetrain Prototype
 Get the wheels turning under program control before anything else.
 
 - Wire motors → motor controller → MCU → battery
@@ -224,7 +229,7 @@ Get the wheels turning under program control before anything else.
 
 *Done when:* You can run a program that drives a square and returns roughly to the starting point.
 
-** 4. Sensor Prototype
+** TODO Sensor Prototype
 Get the mic array working independently of the drivetrain.
 
 - Wire 3 mics with comparator/threshold circuits to interrupt-capable pins
@@ -234,7 +239,7 @@ Get the mic array working independently of the drivetrain.
 
 *Done when:* Clapping from directly left, right, front, and behind gives direction estimates within ~20° of truth. Parameters are tunable.
 
-** 5. Laser Prototype
+** TODO Laser Prototype
 Simple — just get it firing on command.
 
 - Wire laser module through transistor to a GPIO pin
@@ -242,7 +247,7 @@ Simple — just get it firing on command.
 
 *Done when:* Calling =fire()= from code turns the laser on for a fixed pulse. Takes an afternoon.
 
-** 6. Integration: Full Behavior Loop
+** TODO Integration: Full Behavior Loop
 Combine everything and implement the main loop.
 
 - Hear clap → compute direction → turn → drive → fire
@@ -251,7 +256,7 @@ Combine everything and implement the main loop.
 
 *Done when:* You clap, the bot turns toward you, drives at you, and fires the laser. Roughly. It doesn't have to be precise — it has to be fun.
 
-** 7. Foam Block Assembly
+** TODO Foam Block Assembly
 Make it a real object instead of a pile of wires.
 
 - Measure the wired-up assembly to get actual cabin dimensions
@@ -260,7 +265,7 @@ Make it a real object instead of a pile of wires.
 
 *Done when:* The bot holds together well enough to drive around without falling apart.
 
-** 8. Chassis Design and 3D Print
+** TODO Chassis Design and 3D Print
 Replace the foam with something permanent.
 
 - Design chassis in CAD (Fusion 360, OpenSCAD, etc.) using real measured dimensions
