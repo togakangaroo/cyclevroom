@@ -55,6 +55,49 @@ One interesting thought here, is that you could maybe implement this with *any* 
 
 It would be really cool if I could re-purpose some of the random electronics speakers I have as microphones but I'm not sure that's practical
 
+*** Napkin math: can a microcontroller actually detect the timing difference?
+
+Speed of sound: ~343 m/s
+
+Robot is ~1ft (30cm) wide, so mics are at most 30cm apart.
+
+Max time difference (sound arrives perfectly from one side, 90°):
+: Δt = 0.30m / 343 m/s ≈ 874 µs
+
+For a given angle θ from the center line: =Δt = d × sin(θ) / v=
+
+| Angle from center | Δt (30cm spacing) | Δt (15cm spacing) |
+|-------------------+-------------------+-------------------|
+| 90° (hard left)   | 874 µs            | 437 µs            |
+| 45°               | 618 µs            | 309 µs            |
+| 20°               | 299 µs            | 150 µs            |
+| 10°               | 152 µs            | 76 µs             |
+| 5°                | 76 µs             | 38 µs             |
+
+*Can we detect this?* The timing differences are large enough to detect, but the platform choice matters a lot — see below.
+
+**** Platform options for timing detection
+
+*Arduino / ESP board (bare metal microcontroller)*
+A bare metal microcontroller has no OS, so hardware interrupts fire with ~1-2 µs jitter. Arduino's =micros()= has 4 µs resolution; ESP32 is similar. The full 38-874 µs range is well within reach. ESP32 is the better pick over Arduino here: built-in WiFi means you can do OTA (over-the-air) code uploads and use a browser-based REPL — not quite SSH but closer than a raw Arduino. MicroPython runs on it too.
+
+*Raspberry Pi (or similar Linux SBC)*
+This is the appeal — SSH in, write Python, done. The problem: Linux is not a real-time OS. GPIO interrupt latency on a Pi is typically 50-200 µs, and it can spike unpredictably to 1000+ µs when the scheduler is doing other things. That jitter swamps the signal at finer angles (our 5° case is only 38-76 µs). For coarse direction (left vs right, >45°, Δt > 300 µs) it might work often enough to be useful. For reliable fine-grained direction, it won't.
+
+One partial fix: the =pigpio= library on the Pi uses DMA-based GPIO sampling at configurable rates (down to 1 µs) rather than relying on the interrupt scheduler. It's much better than raw GPIO interrupts and might be good enough for this use case. Worth trying before giving up on the Pi entirely.
+
+*Raspberry Pi Pico W*
+A middle ground worth knowing about. The Pico (RP2040 chip) is a proper microcontroller — no Linux, real-time capable, interrupt jitter in the low microseconds. The Pico *W* adds WiFi. Supports MicroPython. Not SSH exactly, but you can use =mpremote= or Thonny over USB, and there's a WebREPL over WiFi. Much easier to develop on than a traditional Arduino while still being real-time.
+
+*Recommended approach*
+Start with an ESP32 or Pico W for the mic timing work — validate the concept. If the rest of the robot logic gets complex enough that you want a full Linux environment, add a Pi Zero 2W alongside it as the "brain" (handles SSH, higher-level logic, camera, etc.) and let the ESP32/Pico handle only the time-critical interrupt detection, communicating direction results over UART or I2C.
+
+*Simpler approach than full audio sampling:* Don't try to record and cross-correlate waveforms. Instead, use each mic signal through a simple analog comparator (or op-amp) to trigger a digital interrupt when the sound exceeds a threshold. Record the timestamp of each interrupt. The time difference between the two timestamps is your direction signal. A clap is a sharp impulse — perfect for threshold detection.
+
+*The front/back problem:* Two mics on opposite ends can tell you left vs right (which mic fired first) and roughly how far off-center (how big the time difference is), but a sound directly in front and directly behind both give Δt ≈ 0. You'd need a third mic (triangle arrangement) to fully disambiguate. For a first version, could just ignore it — the bot picks left or right and the person walks around to be in front if needed.
+
+*Re: using speakers as mics* — technically possible (a speaker coil works in reverse), but sensitivity will be terrible. A cheap electret capsule ($0.50 each) is the right tool.
+
 ** Laser!
 
 This is largely about controlling and powering a laser pointer. Will have to figure that out as well, but handheld laser pointers do exist and we could in the worst case hack that.
