@@ -133,13 +133,35 @@ Start with an ESP32 or Pico W for the mic timing work — validate the concept. 
 
 *Simpler approach than full audio sampling:* Don't try to record and cross-correlate waveforms. Instead, use each mic signal through a simple analog comparator (or op-amp) to trigger a digital interrupt when the sound exceeds a threshold. Record the timestamp of each interrupt. The time difference between the two timestamps is your direction signal. A clap is a sharp impulse — perfect for threshold detection.
 
-*The front/back problem:* Two mics on opposite ends can tell you left vs right (which mic fired first) and roughly how far off-center (how big the time difference is), but a sound directly in front and directly behind both give Δt ≈ 0. You'd need a third mic (triangle arrangement) to fully disambiguate. For a first version, could just ignore it — the bot picks left or right and the person walks around to be in front if needed.
+*Three mics, TDOA triangulation:* With 3 mics in a triangle arrangement, you get 3 pairwise timing deltas (Δt₁₂, Δt₁₃, Δt₂₃ — only 2 are independent). Each delta defines a hyperbola of possible source positions. Two hyperbolas intersect to give a direction; the third overdetermines the system and can be used for error checking. This fully solves front/back ambiguity and gives better angular accuracy than two mics alone.
+
+The mic positions relative to the robot center are the key inputs to the geometry. These need to be tunable parameters in the code — small errors in measured mic placement translate directly into directional error, and you'll want to calibrate against a known sound source rather than trust your ruler.
 
 *Re: using speakers as mics* — technically possible (a speaker coil works in reverse), but sensitivity will be terrible. A cheap electret capsule ($0.50 each) is the right tool.
 
+*** Overall behavior loop
+
+1. Hear clap → compute direction via TDOA across 3 mics
+2. Turn in place toward the source (differential drive)
+3. Drive forward; repeat direction updates from any subsequent claps to stay on target
+4. Stop when close enough (TBD — fixed time, ultrasonic sensor, or just vibes)
+5. Fire laser
+
+*** Calibration parameters needed
+
+- x/y position of each mic relative to robot center (measured, then fine-tuned)
+- Per-mic timing offset (corrects for any systematic latency differences in the analog circuitry)
+- Clap detection threshold (amplitude floor to ignore background noise)
+
 ** Laser!
 
-This is largely about controlling and powering a laser pointer. Will have to figure that out as well, but handheld laser pointers do exist and we could in the worst case hack that.
+The laser fires forward, fixed mount — no servo needed, since the bot has already turned to face the target before firing.
+
+*Simplest implementation:* A KY-008 laser diode module (~$1-2) is designed for microcontroller projects. Wire it through an NPN transistor or small MOSFET (2N2222 or 2N7000) — GPIO pin controls the transistor base, transistor switches the laser ground. Don't drive the laser directly from GPIO; it draws more current than a pin can safely source.
+
+Hacking a handheld pointer also works (solder to the button contacts, switch with a transistor), just more fiddly than a dedicated module.
+
+*Safety class:* Keep it to Class II (<1mW) or IIIa (<5mW). Since the bot autonomously points a laser at whatever it hears, don't go higher.
 
 This could be considered done when we have a laser mounted on the vehicle that can be fired via a program.
 
