@@ -1,0 +1,68 @@
+Building a Robot that I. designed
+
+* Design
+- Two wheel suspended cabin bot
+- Listens for clapping and moves in that direction
+- Stops and fires a laser pointer
+- Solar charging
+
+Solar charging can probably be something we figure out later. Otherwise there's three distinct things to figure out. We could probably give up on the two-wheel design as well though it's pretty cool, I'd like to try it
+
+
+* Planning
+
+** Vehicle
+
+Actually figuring out how to make the chassis, wheels and drive train as well as the basic wiring and mother board. The idea is to have it be RC-car-sized so maybe no more than 1ft wide and tall. Ideally half the size.
+
+This is done when we have at least something to hold the drive train+wheels and computer and it can be moved by a program such as "drive forward" and "turn". The cabin should stay reasonably stable during maneuvers
+
+*** What is this called?
+
+I still think it's important to figure out what this robot form factor is called so that we can look up guidance on how to best do it. The idea is that all the actual "stuff" (sensors, weapons, computer, drive train) is suspended between two larger wheels. So kinda like a tie fighter but with wheels instead of wings. This way, we don't have to deal with the possibility of getting turned upside down as much and it can turn in-place.
+
+*It's called a diwheel (or dicycle).* Two large parallel wheels, body/frame riding between them — exactly the Tie Fighter analogy.
+
+**** Key design insight: passive stability
+
+If the body's center of mass sits *below* the wheel axle, the bot is passively stable like a pendulum — no IMU or balancing algorithm needed. This is the opposite of Segway-style "inverted pendulum" robots where the body sits above the axle and requires active control. At RC scale, passive stability is the right approach: put the batteries low and let gravity do the work.
+
+**** The one problem to know about: gerbiling
+
+During hard acceleration or braking, the inner frame can spin relative to the wheels (like a hamster wheel spinning without the hamster). At small scale this is much less of an issue — just keep CoM well below the axle and don't accelerate aggressively.
+
+**** Notable examples and references
+
+- [[https://newatlas.com/edward-a-diwheel-student-built-vehicle-that-really-works/18853/][EDWARD]] — Electric Diwheel With Active Rotation Damping, University of Adelaide student build (2011). Full-sized human-rideable, best documented diwheel engineering writeup available.
+- [[https://hackaday.com/2025/10/07/building-a-diwheel-to-add-more-tank-controls-to-your-commute/][Sam Barker's DIY diwheel (Hackaday 2025)]] — Steel-welded frame, 3D-printed nylon rollers between inner frame and wheels, suspension added.
+- [[https://en.wikipedia.org/wiki/Dicycle][Wikipedia: Dicycle]] — Overview, history, and variant list.
+
+**** Basic build structure
+
+1. Two large wheels as primary structure, connected by a central axle
+2. Inner cabin/frame hangs on that axle (free to rotate), with CoM below it
+3. One motor per wheel → differential drive → forward, reverse, and spin-in-place
+4. Microphones, laser, and computer all live in the inner cabin
+** Sensors
+
+Probably just two microphones on opposite ends of the chassis, though do I need to be careful there and do the math that the microphones/chip that I use can actually detect timing differences over that distance. I would say that this includes the coding on determining where the sound is coming from and re-orienting the bot in that direction.
+
+This is done when we have the robot able to do this
+
+This impacts the vehicle only in as much as the microphones need to be incorporated into the chassis design and wiring
+
+One interesting thought here, is that you could maybe implement this with *any* RC car first by just taping on microphones.
+
+It would be really cool if I could re-purpose some of the random electronics speakers I have as microphones but I'm not sure that's practical
+
+** Laser!
+
+This is largely about controlling and powering a laser pointer. Will have to figure that out as well, but handheld laser pointers do exist and we could in the worst case hack that.
+
+This could be considered done when we have a laser mounted on the vehicle that can be fired via a program.
+
+** Chassis
+
+This is probably the biggest thing that has to be designed with considering all of the above. We will need to know how much space we have for the onboard computer, for the drive train, for the laser.
+
+Perhaps a smart thing to do would be to figure out all the parts, assemble them in a cardboard box or foam block first and then - once you have the weird, Frankenstein version working, you can design a chassis and get it 3d printed.
