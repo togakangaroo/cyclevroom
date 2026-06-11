@@ -137,7 +137,7 @@ Start with an ESP32 or Pico W for the mic timing work — validate the concept. 
 
 The mic positions relative to the robot center are the key inputs to the geometry. These need to be tunable parameters in the code — small errors in measured mic placement translate directly into directional error, and you'll want to calibrate against a known sound source rather than trust your ruler.
 
-*Re: using speakers as mics* — technically possible (a speaker coil works in reverse), but sensitivity will be terrible. A cheap electret capsule ($0.50 each) is the right tool.
+*Re: using speakers as mics* — technically possible (a speaker coil works in reverse), but sensitivity will be terrible. Use LM393 sound sensor modules (KY-038/FC-04) instead of raw capsules — they include the comparator circuit needed for interrupt-trigger detection and require no additional wiring or IC soldering.
 
 *** Overall behavior loop
 
@@ -200,10 +200,13 @@ Order everything. Expect to wait. Parts can be ordered in batches — you don't 
 
 *** TODO *Batch 1 (order first):
 
- MCU board + microphone capsules/breakout boards. These are independent of the drivetrain and can be prototyped in parallel with it. Getting the sensor work started early is valuable and doesn't depend on the rest.
+ MCU board + microphone modules. These are independent of the drivetrain and can be prototyped in parallel with it. Getting the sensor work started early is valuable and doesn't depend on the rest.
 
-- 1x MCU board (ESP32 or Pico W)
-- 3x electret microphone capsules + breakout boards or op-amp comparator circuit
+- 1x ESP32 DevKitC (or NodeMCU-32S) — confirm listing says "with headers"; most ship pre-soldered
+- 3x LM393 sound sensor module (KY-038 or FC-04, ~$1-3 each) — includes electret capsule, comparator, digital output (D0), and sensitivity pot. This is the right module for the interrupt-trigger approach; skip raw capsules + discrete op-amp circuit
+- 1x USB-A to Micro-USB cable if not already on hand (for programming the ESP32)
+
+*Already on hand (verify before ordering Batch 2):* breadboard, jumper wires, possibly motors and motor controller — check before purchasing duplicates.
 
 *** TODO Batch 2
 Motors, motor controller, wheels, battery, and power components. Order once wheel size and motor specs are settled.
@@ -273,3 +276,56 @@ Replace the foam with something permanent.
 - Repeat until happy
 
 *Done when:* It looks like a robot, not a science experiment.
+
+* Sourcing
+
+Hobbyist-friendly US suppliers that ship promptly. Prefer Adafruit/SparkFun/Mouser/PiShop over AliExpress.
+
+** [3/3] Batch 1
+
+*** DONE ESP32 Dev Board
+CLOSED: [2026-06-11 Thu 16:23]
+
+Ordered Opition B below
+---
+
+The classic ESP32-WROOM-32E DevKitC is in low stock at most US distributors as of June 2026. Two paths:
+
+*Option A — Classic ESP32-WROOM-32E:*
+- [[https://www.mouser.com/ProductDetail/Espressif-Systems/ESP32-DevKitC-32E][Mouser: ESP32-DevKitC-32E]] — ~$10, incoming stock expected ~June 2026 (check availability; may be in stock now). Pre-populated 0.1" headers both sides. This is the canonical DevKitC board. Advantage: most online tutorials and pinout diagrams are written for this chip, so examples copy-paste without translation.
+
+*Option B — In stock now, RISC-V variant:*
+- [[https://www.adafruit.com/product/5337][Adafruit: ESP32-C3 DevKitM-01]] — $9.95, 7 in stock, ships from NYC. Uses a RISC-V core (single-core @ 160 MHz) instead of the classic Xtensa dual-core (240 MHz). Fully supported by Arduino IDE and MicroPython. For this project's pin requirements (~8–10 pins: 3 mic interrupts, 4 motor control, 1 laser) the C3 is entirely adequate — the only practical downside is that tutorial pinouts won't match and you'll need to translate. Perfectly reasonable choice if you don't want to wait.
+
+*Classic ESP32, watch for restock:*
+- [[https://www.adafruit.com/product/3269][Adafruit: ESP32 Development Board (Developer Edition)]] — $15, out of stock; sign up for back-in-stock notification.
+
+*Soldering note:* Both options ship with headers pre-populated — no soldering required.
+
+*** DONE Sound Sensor Modules (need 3)
+CLOSED: [2026-06-11 Thu 16:31]
+
+Ordered from Amazon
+---
+
+KY-038/FC-04 — LM393 comparator, electret mic, D0 digital output, sensitivity pot. These are not stocked by Adafruit or Digi-Key; see options below.
+
+*Best value — buy a pack on Amazon:*
+- [[https://www.amazon.com/MECCANIXITY-Microphone-Sensor-Detection-Voice-Activated/dp/B0DNDRPNYY][Amazon: MECCANIXITY KY-038 4-Pack]] — ~$7–9, ships from Amazon US fulfillment (FBA), seller rated 4.9 stars. Gives you 3 + 1 spare. Standard shipping without Prime is typically 5–8 days.
+
+*Hobbyist retailer, ships same/next day:*
+- [[https://www.pishop.us/product/arduino-compatible-digital-and-analog-microphonesound-sensor-module-lm386/][PiShop.us: LM393 Sound Sensor Module]] — $2.95 each ($8.85 for 3). US-based, USPS Priority 2–4 days. Pay shipping separately.
+
+*SparkFun (higher-spec, higher cost, no pot):*
+- [[https://www.sparkfun.com/products/12642][SparkFun Sound Detector]] — $12.50/ea. Has digital gate output but sensitivity is set by soldering a resistor, not a pot. More capable but $37.50 for 3 — skip unless you want the extra outputs.
+
+*** DONE USB Cable
+CLOSED: [2026-06-11 Thu 16:32]
+
+- USB-A to Micro-USB. Likely already on hand. If not, any electronics seller or hardware store carries these.
+
+I've got a bunch of these
+
+** Batch 2
+
+Parts list defined but not yet sourced — verify what motors and motor controller you already own before ordering.
