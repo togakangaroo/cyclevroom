@@ -17,6 +17,45 @@ Actually figuring out how to make the chassis, wheels and drive train as well as
 
 This is done when we have at least something to hold the drive train+wheels and computer and it can be moved by a program such as "drive forward" and "turn". The cabin should stay reasonably stable during maneuvers
 
+*** Motors, motor controllers, and power
+
+**** Why you need a motor controller
+
+Microcontroller GPIO pins output 3.3V at ~20mA — nowhere near enough to drive a DC motor (which wants hundreds of mA to amps). A motor controller sits between the MCU and motors and acts as a power amplifier. It also contains H-bridge circuitry that lets you reverse the motor direction by flipping the current, which is how you get both forward and backward motion on each wheel.
+
+For independent wheel control and in-place turns, you need a *dual-channel* controller (or two single-channel ones) — one channel per wheel. In-place turns just mean: left motor full forward, right motor full reverse (or vice versa). That's the same differential drive logic, just taken to the extreme.
+
+**** Recommended motor controllers at RC scale
+
+| Controller  | Current (cont.) | Voltage  | Notes                                             |
+|-------------+-----------------+----------+---------------------------------------------------|
+| L298N       | 2A/ch           | 5-35V    | Classic, cheap (~$3), inefficient/runs hot        |
+| TB6612FNG   | 1.2A/ch (3.2A peak) | 2.5-13.5V | Better than L298N, MOSFET-based, efficient, ~$5 |
+| DRV8833     | 1.5A/ch         | 2.7-10.8V | Very small, common on breakout boards, ~$3      |
+| Cytron MDD3A| 3A/ch           | 4.5-13.5V | Dual channel, good value if motors are beefier   |
+
+For this project, the *TB6612FNG* is the right default — efficient, widely supported, fits the motor sizes we'd use. The L298N works but wastes power as heat, which matters for battery life.
+
+**** Power topology
+
+Two separate power rails is the standard pattern:
+
+: [LiPo battery] ──→ [motor controller] ──→ [motors]
+:                 └→ [5V/3.3V regulator] ──→ [MCU + sensors]
+
+Never power the MCU directly from the motor supply — motor switching noise will reset or corrupt the MCU. Separate rails with a small buck converter or LDO regulator for the logic side.
+
+*Battery:* A 2S LiPo (7.4V nominal) is the RC-car standard — light, high energy density, rechargeable. Pairs well with the TB6612FNG's voltage range. You'll want a LiPo-safe charger and should add a low-voltage cutoff to avoid over-discharging (kills LiPos).
+
+**** PWM speed control
+
+Motor speed is set by PWM signal from the MCU — the motor controller uses the duty cycle to throttle power to the motor. Typical setup per channel:
+
+- One PWM pin → speed (0-100% duty cycle)
+- One or two direction pins → forward/reverse
+
+Most motor controller libraries handle this abstraction. On ESP32 or Pico, built-in hardware PWM makes this clean.
+
 *** What is this called?
 
 I still think it's important to figure out what this robot form factor is called so that we can look up guidance on how to best do it. The idea is that all the actual "stuff" (sensors, weapons, computer, drive train) is suspended between two larger wheels. So kinda like a tie fighter but with wheels instead of wings. This way, we don't have to deal with the possibility of getting turned upside down as much and it can turn in-place.
