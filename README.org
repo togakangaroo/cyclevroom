@@ -170,3 +170,86 @@ This could be considered done when we have a laser mounted on the vehicle that c
 This is probably the biggest thing that has to be designed with considering all of the above. We will need to know how much space we have for the onboard computer, for the drive train, for the laser.
 
 Perhaps a smart thing to do would be to figure out all the parts, assemble them in a cardboard box or foam block first and then - once you have the weird, Frankenstein version working, you can design a chassis and get it 3d printed.
+
+* Implementation Sequence
+
+** 1. Planning
+Settle the open questions before spending money on parts.
+
+- Decide on MCU platform (ESP32, Pico W, or hybrid with Pi)
+- Decide on wheel size (target: bot no wider than ~30cm total)
+- Decide on 3-mic triangle arrangement (rough positions on the chassis)
+- Sketch the power topology (battery voltage, regulator, rails)
+
+*Done when:* You can write down a parts list with specific part numbers and quantities and feel confident you're not missing anything structural.
+
+** 2. Source Parts
+Order everything. Expect to wait.
+
+- 2x DC gear motors (ideally with encoders for better drive control)
+- 2x wheels to fit the motors
+- 1x axle or mounting hardware to connect the two wheel/motor assemblies
+- 1x dual motor controller (TB6612FNG recommended)
+- 1x MCU board (ESP32 or Pico W)
+- 3x electret microphone capsules + breakout boards or op-amp comparator circuit
+- 1x laser diode module (KY-008 or similar)
+- 1x NPN transistor or logic-level MOSFET for laser switching
+- 1x 2S LiPo battery + charger
+- 1x 5V buck converter or LDO regulator for logic rail
+- Breadboard, jumper wires, misc passives
+
+*Done when:* Everything has arrived and nothing is obviously wrong or missing.
+
+** 3. Drivetrain Prototype
+Get the wheels turning under program control before anything else.
+
+- Wire motors → motor controller → MCU → battery
+- Write code to drive forward, reverse, turn left, turn right, spin in place
+- Verify each wheel can be controlled independently at variable speed
+
+*Done when:* You can run a program that drives a square and returns roughly to the starting point.
+
+** 4. Sensor Prototype
+Get the mic array working independently of the drivetrain.
+
+- Wire 3 mics with comparator/threshold circuits to interrupt-capable pins
+- Write interrupt handlers to timestamp each mic trigger
+- Compute TDOA deltas and derive a direction angle
+- Test by clapping from known positions and checking the computed angle
+
+*Done when:* Clapping from directly left, right, front, and behind gives direction estimates within ~20° of truth. Parameters are tunable.
+
+** 5. Laser Prototype
+Simple — just get it firing on command.
+
+- Wire laser module through transistor to a GPIO pin
+- Write a =fire()= function
+
+*Done when:* Calling =fire()= from code turns the laser on for a fixed pulse. Takes an afternoon.
+
+** 6. Integration: Full Behavior Loop
+Combine everything and implement the main loop.
+
+- Hear clap → compute direction → turn → drive → fire
+- Tune calibration parameters (mic positions, detection threshold)
+- Figure out the "close enough to stop" heuristic (fixed time, fixed distance estimate, or something else)
+
+*Done when:* You clap, the bot turns toward you, drives at you, and fires the laser. Roughly. It doesn't have to be precise — it has to be fun.
+
+** 7. Foam Block Assembly
+Make it a real object instead of a pile of wires.
+
+- Measure the wired-up assembly to get actual cabin dimensions
+- Cut foam block to hold everything with CoM below axle centerline
+- Verify passive stability: push the cabin, it should swing back
+
+*Done when:* The bot holds together well enough to drive around without falling apart.
+
+** 8. Chassis Design and 3D Print
+Replace the foam with something permanent.
+
+- Design chassis in CAD (Fusion 360, OpenSCAD, etc.) using real measured dimensions
+- Print, assemble, verify everything fits and CoM is still below axle
+- Repeat until happy
+
+*Done when:* It looks like a robot, not a science experiment.
