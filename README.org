@@ -341,7 +341,8 @@ Pololu's 25D series (no encoder) are the right fit — metal gearbox, 4mm D-shaf
 
 The 47:1 is the safer default — more torque headroom, and the robot doesn't need to be fast.
 
-*** Wheels (need 2, 200mm)
+*** DONE Wheels (need 2, 200mm)
+CLOSED: [2026-06-11 Thu 21:48]
 
 Pololu's own 200mm scooter wheels are currently out of stock, but any 200mm inline skate or kick scooter wheel with standard 608 bearings (8mm bore) is a drop-in substitute.
 
@@ -359,7 +360,8 @@ This is the critical coupling piece — clamps to the 4mm D-shaft and fits the 6
 
 *On hand: L298N Dual H-Bridge Motor Drive Controller Board.* Less efficient than the TB6612FNG (runs warmer, draws more quiescent current) but fully adequate for this project — the robot runs in short bursts, not continuously. No need to buy anything here.
 
-*** Laser Diode Module
+*** DONE Laser Diode Module
+CLOSED: [2026-06-11 Thu 21:48]
 
 KY-008 not carried by Adafruit or SparkFun; Amazon is the right channel.
 
