@@ -332,14 +332,35 @@ I've got a bunch of these
 
 Encoders are not needed here. This robot navigates by sound — each clap gives a direction correction via the mic array, so the robot never needs to dead-reckon its position. Plain gearmotors are fine and ~$34 cheaper per pair than the encoder versions.
 
-*On hand: two Geared DC Motors 130 (3V–12V) from a prior car kit ([[https://www.xump.com/science/geared-dc-motor-130-diy-3v-12v.cfm][xump.com ref]]). These won't work for the final diwheel build* — too small/low-torque for 200mm wheels and the shaft won't accept the Pololu wheel adapter. Fine for early L298N wiring tests before the real motors arrive.
+*On hand: two Geared DC Motors 130 (3V–12V) from a prior car kit ([[https://www.xump.com/science/geared-dc-motor-130-diy-3v-12v.cfm][xump.com ref]]). These won't work for the final diwheel build* — too small/low-torque for 200mm wheels and the shaft won't accept the wheel adapter. Fine for early L298N wiring tests before the real motors arrive.
 
-Pololu's 25D series (no encoder) are the right fit — metal gearbox, 4mm D-shaft that mates directly to their scooter wheel adapters. Two gearing options at this scale:
+The actual requirements are narrow: a geared DC motor with a *4mm D-shaft* (so the Pololu wheel adapter can grip it), roughly 30:1–100:1 reduction, and enough torque to push a sub-1kg robot on flat floors (not much). Encoders not needed; HP vs MP vs LP mostly doesn't matter at this weight.
 
-- [[https://www.pololu.com/product/3205][Pololu 25D HP 12V 47:1 (#3205)]] — $32.95 each. ~220 RPM at 12V → ~135 RPM at 7.4V → ~1.4 m/s on 200mm wheel. Best default: HP gives torque headroom for in-place turns, 47:1 keeps speed manageable.
-- [[https://www.pololu.com/product/3204][Pololu 25D HP 12V 34:1 (#3204)]] — $32.95 each. ~300 RPM at 12V → ~185 RPM at 7.4V → ~1.9 m/s. Faster, slightly less torque. Fine if you want the robot to move quicker.
+*The only thing we're actually locked into is the 4mm D-shaft*, and that's a consequence of the Pololu wheel adapter. The adapter also comes in 5mm and 6mm variants if a better motor is found at those sizes.
 
-HP vs MP: HP costs $3 more per motor but handles in-place turns (higher load than straight driving) more comfortably. Worth it.
+*Budget option — JGA25-370 generic gearmotors:*
+
+The JGA25-370 is a common generic 25mm gearbox motor available much cheaper than Pololu's equivalent. Same gearbox size class, same shaft style — but confirm *4mm D-shaft* explicitly before ordering; this motor ships in both 3mm and 4mm variants and listings don't always make it clear.
+
+- [[https://www.openimpulse.com/blog/products-page/25d-gearmotors/jga25-370-dc-gearmotor-77-rpm-6-v/][OpenImpulse JGA25-370 77 RPM / 6V (78:1)]] — $7.63 each. D-shaft confirmed. Slower, more torque.
+- [[https://www.openimpulse.com/blog/products-page/25d-gearmotors/jga25-370-dc-gearmotor-399-rpm-12-v/][OpenImpulse JGA25-370 399 RPM / 12V (21:1)]] — $7.63 each. D-shaft confirmed. Faster, less torque — probably too fast.
+- [[https://www.amazon.com/dp/B06Y6JG4B6][Amazon: Optimus Electric JGA25-370 250 RPM / 12V (35:1)]] — price varies; D-shaft listed in title but verify shaft diameter before ordering.
+
+For this robot, a 45:1–78:1 ratio at 6–12V is the right range. At 7.4V a 78:1 motor would spin ~60–80 RPM → ~0.6–0.8 m/s, which is a comfortable walking pace.
+
+*Premium option — Pololu 25D HP:*
+
+More expensive but better documented, more consistent quality, and Pololu explicitly validates the adapter fit.
+
+- [[https://www.pololu.com/product/3205][Pololu 25D HP 12V 47:1 (#3205)]] — $32.95 each. ~135 RPM at 7.4V → ~1.4 m/s. Confirmed 4mm D-shaft.
+- [[https://www.pololu.com/product/3204][Pololu 25D HP 12V 34:1 (#3204)]] — $32.95 each. ~185 RPM at 7.4V → ~1.9 m/s. Faster option.
+
+*Cost comparison per wheel (motor + adapter):*
+
+| Option | Motor | Adapter | Per wheel | Pair |
+|--------+-------+---------+-----------+------|
+| JGA25-370 (OpenImpulse) + Pololu adapter | $7.63 | $7.75 | ~$15 | ~$30 |
+| Pololu 25D HP + Pololu adapter | $32.95 | $7.75 | ~$41 | ~$82 |
 
 *** DONE Wheels (need 2, 200mm)
 CLOSED: [2026-06-11 Thu 21:48]
@@ -351,9 +372,14 @@ Pololu's own 200mm scooter wheels are currently out of stock, but any 200mm inli
 
 *** Wheel-to-Motor Adapters (need 2)
 
-This is the critical coupling piece — clamps to the 4mm D-shaft and fits the 608 bearing bore. Specific to the 25D motor shaft size.
+Clamps to the motor D-shaft and seats into the 608 bearing bore (8mm ID) of the wheel. No generic equivalent exists — Pololu's adapter is the only commercial machined option. Available in three shaft sizes:
 
-- [[https://www.pololu.com/product/2672][Pololu Scooter Wheel Adapter for 4mm Shaft #2672]] — $7.75 each
+- [[https://www.pololu.com/product/2672][Pololu Scooter Wheel Adapter for 4mm Shaft #2672]] — $7.75 each *(use with JGA25-370 or Pololu 25D if 4mm confirmed)*
+- [[https://www.pololu.com/product/2673][Pololu Scooter Wheel Adapter for 5mm Shaft #2673]] — $7.75 each
+- [[https://www.pololu.com/product/2674][Pololu Scooter Wheel Adapter for 6mm Shaft #2674]] — $7.75 each
+
+Which adapter to buy depends on which motor shaft size you confirm. Don't order until motor shaft diameter is verified.
+
 - *Hardware note:* the included M3 screws are too short for a 200mm wheel's deeper hub. Pick up M3×35mm or M3×40mm screws at a hardware store (~$2).
 
 *** DONE Motor Controller
@@ -388,15 +414,20 @@ The 2N7000 MOSFET switches more cleanly from a 3.3V GPIO than the 2N2222 BJT (no
 
 *** Batch 2 Cost Estimate
 
-| Item                            |   Qty | Each   | Total       |
-|---------------------------------+-------+--------+-------------|
-| 25D HP 47:1 motor #3205         |     2 | $32.95 | $65.90      |
-| Scooter wheel adapter (4mm)     |     2 | $7.75  | $15.50      |
-| 200mm scooter wheels (Amazon)   |     2 | ~$20   | ~$40        |
-| KY-008 laser 5-pack             |     1 | ~$8    | ~$8         |
-| 2N7000 MOSFET 50-pack           |     1 | ~$6    | ~$6         |
+Two motor scenarios — everything else is the same either way.
+
+| Item                                    |   Qty | Each   | Budget      | Premium     |
+|-----------------------------------------+-------+--------+-------------+-------------|
+| Motors (JGA25-370 vs Pololu 25D HP)     |     2 | —      | ~$15 (×2)   | $32.95 (×2) |
+| Scooter wheel adapter (confirm shaft ø) |     2 | $7.75  | $15.50      | $15.50      |
+| 200mm scooter wheels                    |     2 | —      | on hand     | on hand     |
+| KY-008 laser 5-pack                     |     1 | ~$8    | ~$8         | ~$8         |
+| 2N7000 MOSFET 50-pack                   |     1 | ~$6    | ~$6         | ~$6         |
 | SparkFun 5V buck converter      |     1 | $7.70  | $7.70       |
 | M3×35mm screws (hardware store) | 1 bag | ~$2    | ~$2         |
-| ~~TB6612FNG~~                   |     — | —      | have L298N  |
-| ~~2S LiPo + charger~~           |     — | —      | have 18650s |
-| *Subtotal*                      |       |        | *~$145*     |
+| SparkFun 5V buck converter              |     1 | $7.70  | $7.70       | $7.70       |
+| ~~TB6612FNG~~                           |     — | —      | have L298N  | have L298N  |
+| ~~2S LiPo + charger~~                   |     — | —      | have 18650s | have 18650s |
+| ~~200mm wheels~~                        |     — | —      | on hand     | on hand     |
+| M3×35mm screws (hardware store)         |     1 | ~$2    | ~$2         | ~$2         |
+| *Subtotal*                              |       |        | *~$54*      | *~$105*     |
