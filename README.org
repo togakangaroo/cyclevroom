@@ -334,12 +334,12 @@ Encoders are not needed here. This robot navigates by sound — each clap gives 
 
 *On hand: two Geared DC Motors 130 (3V–12V) from a prior car kit ([[https://www.xump.com/science/geared-dc-motor-130-diy-3v-12v.cfm][xump.com ref]]). These won't work for the final diwheel build* — too small/low-torque for 200mm wheels and the shaft won't accept the Pololu wheel adapter. Fine for early L298N wiring tests before the real motors arrive.
 
-Pololu's 25D series (no encoder) are the right fit — metal gearbox, 4mm D-shaft that mates directly to their scooter wheel adapters. Two gearing options:
+Pololu's 25D series (no encoder) are the right fit — metal gearbox, 4mm D-shaft that mates directly to their scooter wheel adapters. Two gearing options at this scale:
 
-- [[https://www.pololu.com/product/3269][Pololu 25D HP 12V 47:1 (no encoder)]] — ~$22.95 each. ~220 RPM no-load → ~1.4 m/s on 200mm wheel. High torque, good for a heavier build.
-- [[https://www.pololu.com/product/3273][Pololu 25D MP 12V 20.4:1 (no encoder)]] — ~$20.95 each. ~480 RPM → ~2.4 m/s. Faster, less torque.
+- [[https://www.pololu.com/product/3205][Pololu 25D HP 12V 47:1 (#3205)]] — $32.95 each. ~220 RPM at 12V → ~135 RPM at 7.4V → ~1.4 m/s on 200mm wheel. Best default: HP gives torque headroom for in-place turns, 47:1 keeps speed manageable.
+- [[https://www.pololu.com/product/3204][Pololu 25D HP 12V 34:1 (#3204)]] — $32.95 each. ~300 RPM at 12V → ~185 RPM at 7.4V → ~1.9 m/s. Faster, slightly less torque. Fine if you want the robot to move quicker.
 
-The 47:1 is the safer default — more torque headroom, and the robot doesn't need to be fast.
+HP vs MP: HP costs $3 more per motor but handles in-place turns (higher load than straight driving) more comfortably. Worth it.
 
 *** DONE Wheels (need 2, 200mm)
 CLOSED: [2026-06-11 Thu 21:48]
@@ -356,7 +356,8 @@ This is the critical coupling piece — clamps to the 4mm D-shaft and fits the 6
 - [[https://www.pololu.com/product/2672][Pololu Scooter Wheel Adapter for 4mm Shaft #2672]] — $7.75 each
 - *Hardware note:* the included M3 screws are too short for a 200mm wheel's deeper hub. Pick up M3×35mm or M3×40mm screws at a hardware store (~$2).
 
-*** Motor Controller
+*** DONE Motor Controller
+CLOSED: [2026-06-12 Fri 10:01]
 
 *On hand: L298N Dual H-Bridge Motor Drive Controller Board.* Less efficient than the TB6612FNG (runs warmer, draws more quiescent current) but fully adequate for this project — the robot runs in short bursts, not continuously. No need to buy anything here.
 
@@ -389,7 +390,7 @@ The 2N7000 MOSFET switches more cleanly from a 3.3V GPIO than the 2N2222 BJT (no
 
 | Item                            |   Qty | Each   | Total       |
 |---------------------------------+-------+--------+-------------|
-| 25D HP 47:1 motor (no encoder)  |     2 | $22.95 | $45.90      |
+| 25D HP 47:1 motor #3205         |     2 | $32.95 | $65.90      |
 | Scooter wheel adapter (4mm)     |     2 | $7.75  | $15.50      |
 | 200mm scooter wheels (Amazon)   |     2 | ~$20   | ~$40        |
 | KY-008 laser 5-pack             |     1 | ~$8    | ~$8         |
@@ -398,4 +399,4 @@ The 2N7000 MOSFET switches more cleanly from a 3.3V GPIO than the 2N2222 BJT (no
 | M3×35mm screws (hardware store) | 1 bag | ~$2    | ~$2         |
 | ~~TB6612FNG~~                   |     — | —      | have L298N  |
 | ~~2S LiPo + charger~~           |     — | —      | have 18650s |
-| *Subtotal*                      |       |        | *~$125*     |
+| *Subtotal*                      |       |        | *~$145*     |
