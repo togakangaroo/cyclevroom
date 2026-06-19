@@ -518,11 +518,13 @@ and a command line tool
   cargo install esp-generate --locked
 #+end_src
 
-** First experiment
+** DONE Always on LED from constant voltage
+CLOSED: [2026-06-19 Fri 14:48]
 
 Using [[https://esp32.co.uk/esp32-c3-devkitm-1-pinout-diagram-and-safe-gpios-boot-pins-adc-i2c-spi/][the pinout]] I connected 3v across an old white led and 330 ohm resistor. It glows!
 
-** Blink
+** DONE Blink
+CLOSED: [2026-06-19 Fri 14:48]
 
 Time to make the LED do something.
 
@@ -535,13 +537,12 @@ link and =esp-backtrace= prints a backtrace on panic. =embassy= depends on =unst
 
 =--headless= skips the interactive TUI so the options are reproducible here. It generates into a subdir for us
 
-#+begin_src shell
+#+begin_src shell :results silent
   esp-generate --headless --skip-update-check -c esp32c3 \
       -o unstable-hal -o embassy -o defmt -o esp-backtrace \
       -O . firmware-blinker
 #+end_src
 
-#+RESULTS:
 
 *** The code
 
@@ -556,7 +557,7 @@ Replace the hello-world loop body with a real pin. =Output::new= takes the GPIO3
   }
 #+end_src
 
-** Flashing it
+*** Flashing it
 
 =esp-generate= wired =cargo run= to flash via espflash (see =.cargo/config.toml= runner) and then open the serial monitor, so flashing is just =cargo run= from inside =firmware/=. First build is slow (compiles the whole HAL); later ones are quick.
 
@@ -589,4 +590,39 @@ Error:   × Failed to initialize input reader
 
 and boom, blinking
 
-** LED on when a noise is heard on one mic
+** DONE LED on when a noise is heard on one mic
+CLOSED: [2026-06-19 Fri 14:48]
+
+We're just going to turn on the LED when there's a noise on the mic. That's it
+
+So set up our workspace for code
+
+#+begin_src shell :results silent
+  esp-generate --headless --skip-update-check -c esp32c3 \
+      -o unstable-hal -o embassy -o defmt -o esp-backtrace \
+      -O . firmware-listener
+#+end_src
+
+Write our code into [[./firmware-listener/src/bin/main.rs][main.rs]]
+
+
+Wire in the microphone module with D0 wired to GPI4 and out LED wired to GPIO3 and
+
+#+begin_src shell :dir firmware-listener
+    cargo run --release 2>&1
+#+end_src
+
+Note that with these KY-038 modules, you might have to twist the screw in the pot for a while to find the sensitivity balance. The leftmost onboard light is wired to on when D0 is high. "More sensitivity" is turning the pot clockwise.
+
+** TODO Two mic modules and detecting left or right
+
+I now have two microphone modules both tuned to trigger D0 on a clap. Now I want to use them to detect whether the sound is coming from the left or the right. Due to space constraints on my breadboard I can only have them about 5cm apart. 
+
+Set up our workspace for code
+
+#+begin_src shell :results silent
+  esp-generate --headless --skip-update-check -c esp32c3 \
+      -o unstable-hal -o embassy -o defmt -o esp-backtrace \
+      -O . firmware-left-or-right
+#+end_src
+
