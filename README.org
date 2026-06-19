@@ -522,44 +522,30 @@ and a command line tool
 
 Using [[https://esp32.co.uk/esp32-c3-devkitm-1-pinout-diagram-and-safe-gpios-boot-pins-adc-i2c-spi/][the pinout]] I connected 3v across an old white led and 330 ohm resistor. It glows!
 
-** Blink: scaffolding the project
+** Blink
 
-Time to make the LED do something. Going with *GPIO3* -- a clean general-purpose pin, not a strapping/boot pin (those are GPIO2/8/9), and not
+Time to make the LED do something.
+
+*** Scaffolding the project
+Going with *GPIO3* -- a clean general-purpose pin, not a strapping/boot pin (those are GPIO2/8/9), and not
 tied to the flash or USB lines.
 
 Now scaffold a =no_std= project with =esp-generate=. We go with *embassy* from the start for async. =defmt= gives us structured logging over the serial
 link and =esp-backtrace= prints a backtrace on panic. =embassy= depends on =unstable-hal= (it uses esp-hal APIs not yet stabilised), so that has to be passed explicitly too.
 
-=--headless= skips the interactive TUI so the options are reproducible here. It generates into a =firmware/= subdir for us
+=--headless= skips the interactive TUI so the options are reproducible here. It generates into a subdir for us
 
 #+begin_src shell
   esp-generate --headless --skip-update-check -c esp32c3 \
       -o unstable-hal -o embassy -o defmt -o esp-backtrace \
-      -O . firmware
+      -O . firmware-blinker
 #+end_src
 
 #+RESULTS:
-:
-: Checking installed versions
-: 🆗 Rust (stable): 1.96.0
-: 🆗 espflash: 4.4.0
-: 💡 probe-rs (not found - see https://probe.rs/docs/getting-started/installation/ for how to install (suggested))
-: 💡 esp-config (not found - use `cargo install esp-config --features=tui --locked` to install (installation is optional))
-:
 
-** Blink: the code
+*** The code
 
-The generated =firmware/src/bin/main.rs= already has the embassy shape we want
--- an async =main=, the timer/clock init, and a =loop= that already ticks once a
-second logging "Hello world!". We just swap the log for a GPIO toggle.
-
-Two edits. First, bring the GPIO output types into scope:
-
-#+begin_src rust
-  use esp_hal::gpio::{Level, Output, OutputConfig};
-#+end_src
-
-Then replace the hello-world loop body with a real pin. =Output::new= takes the GPIO3 peripheral, an initial level, and a config; =Level::Low= starts the LED off:
+Replace the hello-world loop body with a real pin. =Output::new= takes the GPIO3 peripheral, an initial level, and a config; =Level::Low= starts the LED off:
 
 #+begin_src rust
   let mut led = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
@@ -570,29 +556,37 @@ Then replace the hello-world loop body with a real pin. =Output::new= takes the 
   }
 #+end_src
 
-** Blink: flashing it
+** Flashing it
 
 =esp-generate= wired =cargo run= to flash via espflash (see =.cargo/config.toml= runner) and then open the serial monitor, so flashing is just =cargo run= from inside =firmware/=. First build is slow (compiles the whole HAL); later ones are quick.
 
-#+begin_src shell :dir firmware
-    cargo run --release
+#+begin_src shell :dir firmware-blinker
+    cargo run --release 2>&1
 #+end_src
 
 #+RESULTS:
 #+begin_example
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `espflash flash --monitor --chip esp32c3 --log-format defmt target/riscv32imc-unknown-none-elf/release/firmware`
+[2026-06-19T04:07:35Z INFO ] Serial port: '/dev/ttyUSB0'
+[2026-06-19T04:07:35Z INFO ] Connecting...
+[2026-06-19T04:07:35Z INFO ] Using flash stub
 Chip type:         esp32c3 (revision v1.1)
 Crystal frequency: 40 MHz
 Flash size:        4MB
 Features:          WiFi, BLE
 MAC address:       a0:f2:62:0c:84:88
 App/part. size:    93,248/4,128,768 bytes, 2.26%
+[2026-06-19T04:07:39Z INFO ] Flashing has completed!
 Commands:
     CTRL+R    Reset chip
     CTRL+C    Exit
 
 ESP-ROM:esp32c3-eco7-20230720
+Error:   × Failed to initialize input reader
+
 #+end_example
 
-and boom! that works! It's flashing!
+and boom, blinking
 
 ** LED on when a noise is heard on one mic
