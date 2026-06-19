@@ -512,6 +512,8 @@ add the toolchain and stdlib to compile to risc-v
   rustup target add riscv32imc-unknown-none-elf
 #+end_src
 
+#+RESULTS:
+
 and a command line tool
 
 #+begin_src shell :results silent
@@ -614,9 +616,9 @@ Wire in the microphone module with D0 wired to GPI4 and out LED wired to GPIO3 a
 
 Note that with these KY-038 modules, you might have to twist the screw in the pot for a while to find the sensitivity balance. The leftmost onboard light is wired to on when D0 is high. "More sensitivity" is turning the pot clockwise.
 
-** TODO Two mic modules and detecting left or right
+** Two mic modules and detecting left or right
 
-I now have two microphone modules both tuned to trigger D0 on a clap. Now I want to use them to detect whether the sound is coming from the left or the right. Due to space constraints on my breadboard I can only have them about 5cm apart. 
+I now have two microphone modules both tuned to trigger D0 on a clap. Now I want to use them to detect whether the sound is coming from the left or the right. Due to space constraints on my breadboard I can only have them about 5cm apart.
 
 Set up our workspace for code
 
@@ -626,3 +628,30 @@ Set up our workspace for code
       -O . firmware-left-or-right
 #+end_src
 
+*** The approach
+
+The near mic hears the clap first. So: race both D0 rising edges with embassy's =select=, timestamp whichever wins, then wait (bounded by a timeout) for the other edge and timestamp that too. The gap (=Δt=) tells us which side and by hpw much.
+
+At 5cm spacing the *largest physically possible* arrival difference is only =0.05 / 343 ≈ 146 µs=, and that's for sound coming dead sideways. Two cheap KY-038 modules jitter by tens of µs on their own, so we don't pretend to resolve an angle -- we report just three states: *LEFT*, *RIGHT*, and *CENTER* (=Δt= below a deadband, too small to trust). Good enough: the real robot only needs a coarse "which way" vote per clap and corrects over repeated claps.
+
+Code is in [[./firmware-left-or-right/src/bin/main.rs][main.rs]]. The tunables live at the top:
+- =CENTER_DEADBAND_US= (60) -- below this |Δt|, call it CENTER. Clap from known left/right, watch the logged deltas, and set this just above the spread you see from center claps.
+- =BLANKING_MS= (200) -- ignore echoes/chatter after each clap.
+- =PAIR_TIMEOUT_MS= (50) -- how long to wait for the second mic before reporting on just the first.
+
+*** Wiring
+
+- LEFT mic D0 on *GPIO4* (where the single mic lived)
+- RIGHT mic D0 goes to *GPIO5*.
+- LED on *GPIO3*.
+
+
+*** Deploy
+
+#+begin_src shell :dir firmware-left-or-right
+    cargo run --release 2>&1
+#+end_src
+
+The LED encodes each decision: *1 blink* = left, *2 blinks* = right, *1 long solid pulse* = center. The serial log prints the actual µs delta per clap (=near=Left by 87us=) -- that's the tuning guide for the deadband.
+
+It works!
