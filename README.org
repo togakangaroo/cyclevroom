@@ -491,5 +491,33 @@ So the board is an *ESP32-C3* (RISC-V core), as ordered. Note the bridge chip is
 
 Why the C3 being RISC-V matters for Rust: it uses the *stock upstream Rust* toolchain (target =riscv32imc-unknown-none-elf=). The older Xtensa ESP32 would have required Espressif's forked compiler via =espup=. We dodged that.
 
+** Choosing no_std
+
+Two flavors of embedded Rust for the ESP32:
+
+- =no_std= (bare metal) via *esp-hal* -- no OS, direct hardware access. The mainstream, best-supported path for the C3 and what =esp-generate= scaffolds.
+- =std= via *esp-idf-hal* -- runs on top of Espressif's ESP-IDF C framework, giving threads/heap/full networking more easily, at the cost of a much heavier toolchain.
+
+Going with *no_std + esp-hal*. It's the natural fit for the interrupt-timing precision the mic TDOA work needs, and it's the better-documented path.
+
+Important: =no_std= does *not* mean giving up WiFi/Bluetooth. =no_std= is about not having the standard library (heap/threads/filesystem), not about radios. On esp-hal, WiFi + BLE work in =no_std= via the *esp-wifi* crate, and pairing with *embassy* (an embedded async runtime) lets a radio task run alongside motor/mic tasks concurrently with no OS. So browser/phone control can be added later without switching off this base. =esp-generate= can include esp-wifi + embassy from the start, so we don't paint ourselves into a corner.
+
+** Toolchain + scaffolding install
+
+Add the RISC-V target and the project generator. =esp-generate= is Espressif's scaffolding tool -- it builds a no_std project skeleton with the right config (linker, =cargo run= flashing via espflash, optional esp-wifi/embassy).
+
+add the toolchain and stdlib to compile to risc-v
+
 #+begin_src shell
+  rustup target add riscv32imc-unknown-none-elf
 #+end_src
+
+and a command line tool
+
+#+begin_src shell :results silent
+  cargo install esp-generate --locked
+#+end_src
+
+** First experiment
+
+Using [[https://esp32.co.uk/esp32-c3-devkitm-1-pinout-diagram-and-safe-gpios-boot-pins-adc-i2c-spi/][the pinout]] I connected 3v across an old white led and 330 ohm resistor. It glows!
