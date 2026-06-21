@@ -216,9 +216,7 @@ Motors, motor controller, wheels, battery, and power components. Order once whee
 - 1x axle or mounting hardware to connect the two wheel/motor assemblies
 - 1x dual motor controller (TB6612FNG recommended)
 - 1x laser diode module (KY-008 or similar)
-- 1x NPN transistor or logic-level MOSFET for laser switching
 - 1x 2S LiPo battery + charger
-- 1x 5V buck converter or LDO regulator for logic rail
 - Breadboard, jumper wires, misc passives
 
 *Done when:* Everything has arrived and nothing is obviously wrong or missing.
@@ -245,7 +243,7 @@ Get the mic array working independently of the drivetrain.
 ** TODO Laser Prototype
 Simple — just get it firing on command.
 
-- Wire laser module through transistor to a GPIO pin
+- Wire laser module signal pin to a GPIO pin (KY-008 module handles current internally — no transistor needed)
 - Write a =fire()= function
 
 *Done when:* Calling =fire()= from code turns the laser on for a fixed pulse. Takes an afternoon.
@@ -328,7 +326,10 @@ I've got a bunch of these
 
 ** Batch 2
 
-*** Motors (need 2, no encoders required)
+*** DONE Motors (need 2, no encoders required)
+CLOSED: [2026-06-20 Sat 19:57]
+
+[[https://www.aliexpress.us/item/2251832761588725.html][Ordered two of these]]
 
 Encoders are not needed here. This robot navigates by sound — each clap gives a direction correction via the mic array, so the robot never needs to dead-reckon its position. Plain gearmotors are fine and ~$34 cheaper per pair than the encoder versions.
 
@@ -342,11 +343,23 @@ The actual requirements are narrow: a geared DC motor with a *4mm D-shaft* (so t
 
 The JGA25-370 is a common generic 25mm gearbox motor available much cheaper than Pololu's equivalent. Same gearbox size class, same shaft style — but confirm *4mm D-shaft* explicitly before ordering; this motor ships in both 3mm and 4mm variants and listings don't always make it clear.
 
-- [[https://www.openimpulse.com/blog/products-page/25d-gearmotors/jga25-370-dc-gearmotor-77-rpm-6-v/][OpenImpulse JGA25-370 77 RPM / 6V (78:1)]] — $7.63 each. D-shaft confirmed. Slower, more torque.
-- [[https://www.openimpulse.com/blog/products-page/25d-gearmotors/jga25-370-dc-gearmotor-399-rpm-12-v/][OpenImpulse JGA25-370 399 RPM / 12V (21:1)]] — $7.63 each. D-shaft confirmed. Faster, less torque — probably too fast.
-- [[https://www.amazon.com/dp/B06Y6JG4B6][Amazon: Optimus Electric JGA25-370 250 RPM / 12V (35:1)]] — price varies; D-shaft listed in title but verify shaft diameter before ordering.
+Slow shipping from china by unknown seller. Eliminated:
+  - [[https://www.openimpulse.com/blog/products-page/25d-gearmotors/jga25-370-dc-gearmotor-77-rpm-6-v/][OpenImpulse JGA25-370 77 RPM / 6V (78:1)]] — $7.63 each. D-shaft confirmed. Slower, more torque.
+  - [[https://www.openimpulse.com/blog/products-page/25d-gearmotors/jga25-370-dc-gearmotor-399-rpm-12-v/][OpenImpulse JGA25-370 399 RPM / 12V (21:1)]] — $7.63 each. D-shaft confirmed. Faster, less torque — probably too fast.
+
+Completely out of stock:
+  - [[https://www.amazon.com/dp/B06Y6JG4B6][Amazon: Optimus Electric JGA25-370 250 RPM / 12V (35:1)]] — price varies; D-shaft listed in title but verify shaft diameter before ordering.
 
 For this robot, a 45:1–78:1 ratio at 6–12V is the right range. At 7.4V a 78:1 motor would spin ~60–80 RPM → ~0.6–0.8 m/s, which is a comfortable walking pace.
+
+*Recommended — BRINGSMART JGA25-370 on AliExpress:*
+
+4mm D-shaft confirmed in product images. ~12-day USPS delivery to US. Note: listings have a 1/shopper "Welcome Deal" cap — buy one from each listing to get two motors.
+
+- [[https://www.aliexpress.us/item/2251832673911305.html][AliExpress: BRINGSMART JGA25-370 170rpm@12V (MACHINERY CN STORE)]] — ~$7, 170rpm@12V → ~105 RPM at 7.4V. *(buy 1 here)*
+- [[https://www.aliexpress.us/item/2251832761588725.html][AliExpress: BRINGSMART JGA25-370 130rpm@12V (BRINGSMART official)]] — ~$3, 130rpm@12V → ~80 RPM at 7.4V. *(buy 1 here)*
+
+Slight RPM mismatch (~20%) is fine — TDOA correction on every clap compensates for any drift.
 
 *Premium option — Pololu 25D HP:*
 
@@ -357,10 +370,10 @@ More expensive but better documented, more consistent quality, and Pololu explic
 
 *Cost comparison per wheel (motor + adapter):*
 
-| Option | Motor | Adapter | Per wheel | Pair |
-|--------+-------+---------+-----------+------|
-| JGA25-370 (OpenImpulse) + Pololu adapter | $7.63 | $7.75 | ~$15 | ~$30 |
-| Pololu 25D HP + Pololu adapter | $32.95 | $7.75 | ~$41 | ~$82 |
+| Option                                   | Motor  | Adapter | Per wheel | Pair |
+|------------------------------------------+--------+---------+-----------+------|
+| JGA25-370 (OpenImpulse) + Pololu adapter | $7.63  | $7.75   | ~$15      | ~$30 |
+| Pololu 25D HP + Pololu adapter           | $32.95 | $7.75   | ~$41      | ~$82 |
 
 *** DONE Wheels (need 2, 200mm)
 CLOSED: [2026-06-11 Thu 21:48]
@@ -370,7 +383,8 @@ Pololu's own 200mm scooter wheels are currently out of stock, but any 200mm inli
 - [[https://www.amazon.com/s?k=200mm+scooter+replacement+wheels+608+bearing][Amazon: search "200mm scooter wheels 608 bearing"]] — ~$15–30/ea; verify listing mentions 608 bearings
 - [[https://www.pololu.com/product/3283][Pololu 200×30mm Scooter Wheel]] — $23.18/ea when back in stock; same 608 spec
 
-*** Wheel-to-Motor Adapters (need 2)
+*** DONE Wheel-to-Motor Adapters (need 2)
+CLOSED: [2026-06-20 Sat 19:56]
 
 Clamps to the motor D-shaft and seats into the 608 bearing bore (8mm ID) of the wheel. No generic equivalent exists — Pololu's adapter is the only commercial machined option. Available in three shaft sizes:
 
@@ -382,6 +396,7 @@ Which adapter to buy depends on which motor shaft size you confirm. Don't order 
 
 - *Hardware note:* the included M3 screws are too short for a 200mm wheel's deeper hub. Pick up M3×35mm or M3×40mm screws at a hardware store (~$2).
 
+Web order number is #1200576.
 *** DONE Motor Controller
 CLOSED: [2026-06-12 Fri 10:01]
 
@@ -394,40 +409,25 @@ KY-008 not carried by Adafruit or SparkFun; Amazon is the right channel.
 
 - [[https://www.amazon.com/HiLetgo-KY-008-Transmitter-Module-Arduino/dp/B01I1J12JO][Amazon: HiLetgo KY-008 5-pack]] — ~$7–9. Ships from US Amazon fulfillment. HiLetgo is a reliable hobbyist brand. Gives 4 spares.
 
-*** Laser Switching Transistor
-
-The 2N7000 MOSFET switches more cleanly from a 3.3V GPIO than the 2N2222 BJT (no base resistor math needed, gate threshold is well within 3.3V range). Buy a pack — they cost pennies.
-
-- [[https://www.amazon.com/McIgIcM-2n7000-n-channel-transistor-assortment/dp/B07BKX255D][Amazon: MCIGICM 2N7000 50-pack]] — ~$5–7. Prime eligible.
-- [[https://www.adafruit.com/product/756][Adafruit PN2222 NPN 10-pack #756]] — $1.95 *(BJT alternative; works fine with a 330–470Ω base resistor)*
-
-*** Battery + Charger
+*** TODO Battery + Charger
 
 *On hand: 18650 battery holder with two cells and charger.* Two 18650s in series gives ~7.4V nominal — identical voltage to the 2S LiPo we'd have bought, saves ~$65. Lower max discharge rate than a LiPo pouch, but a slow robot won't stress them.
 
 *Verify before using:* check the voltage across the holder's output terminals with a multimeter. Should read ~7.4–8.4V when charged. If it reads ~3.7–4.2V the cells are wired in parallel (not series) and won't work for this — you'd need to rewire the holder or buy a proper 2S pack.
 
-*** Logic Rail (5V Buck Converter)
-
-- [[https://www.sparkfun.com/sparkfun-buck-regulator-breakout-5v-ap63357.html][SparkFun 5V Buck Regulator Breakout (AP63357)]] — $7.70. Input 6–32V, output 5V @ 3A. Screw terminals. Best value pick.
-- [[https://www.adafruit.com/product/1385][Adafruit UBEC 5V @ 3A]] — $9.95. Works, but low-end input is 7V — may cut out near depleted cells. Only choose this if consolidating an Adafruit order.
-
 *** Batch 2 Cost Estimate
 
 Two motor scenarios — everything else is the same either way.
 
-| Item                                    |   Qty | Each   | Budget      | Premium     |
-|-----------------------------------------+-------+--------+-------------+-------------|
-| Motors (JGA25-370 vs Pololu 25D HP)     |     2 | —      | ~$15 (×2)   | $32.95 (×2) |
-| Scooter wheel adapter (confirm shaft ø) |     2 | $7.75  | $15.50      | $15.50      |
-| 200mm scooter wheels                    |     2 | —      | on hand     | on hand     |
-| KY-008 laser 5-pack                     |     1 | ~$8    | ~$8         | ~$8         |
-| 2N7000 MOSFET 50-pack                   |     1 | ~$6    | ~$6         | ~$6         |
-| SparkFun 5V buck converter      |     1 | $7.70  | $7.70       |
-| M3×35mm screws (hardware store) | 1 bag | ~$2    | ~$2         |
-| SparkFun 5V buck converter              |     1 | $7.70  | $7.70       | $7.70       |
-| ~~TB6612FNG~~                           |     — | —      | have L298N  | have L298N  |
-| ~~2S LiPo + charger~~                   |     — | —      | have 18650s | have 18650s |
-| ~~200mm wheels~~                        |     — | —      | on hand     | on hand     |
-| M3×35mm screws (hardware store)         |     1 | ~$2    | ~$2         | ~$2         |
-| *Subtotal*                              |       |        | *~$54*      | *~$105*     |
+| Item                                    |   Qty | Each  | Budget      | Premium     |
+|-----------------------------------------+-------+-------+-------------+-------------|
+| Motors (JGA25-370 vs Pololu 25D HP)     |     2 | —     | ~$15 (×2)   | $32.95 (×2) |
+| Scooter wheel adapter (confirm shaft ø) |     2 | $7.75 | $15.50      | $15.50      |
+| 200mm scooter wheels                    |     2 | —     | on hand     | on hand     |
+| KY-008 laser 5-pack                     |     1 | ~$8   | ~$8         | ~$8         |
+| ~~SparkFun 5V buck converter~~          |     — | —     | L298N 5V out | L298N 5V out |
+| ~~TB6612FNG~~                           |     — | —     | have L298N  | have L298N  |
+| ~~2S LiPo + charger~~                   |     — | —     | have 18650s | have 18650s |
+| ~~200mm wheels~~                        |     — | —     | on hand     | on hand     |
+| M3×35mm screws (hardware store)         |     1 | ~$2   | ~$2         | ~$2         |
+| *Subtotal*                              |       |       | *~$40*      | *~$91*      |
