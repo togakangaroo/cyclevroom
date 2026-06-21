@@ -431,3 +431,227 @@ Two motor scenarios — everything else is the same either way.
 | ~~200mm wheels~~                        |     — | —     | on hand     | on hand     |
 | M3×35mm screws (hardware store)         |     1 | ~$2   | ~$2         | ~$2         |
 | *Subtotal*                              |       |       | *~$40*      | *~$91*      |
+
+* Coding
+:PROPERTIES:
+:header-args:shell+: :results verbatim
+:header-args:shell+: :prologue "newgrp dialout"
+:END:
+
+** Dev environment setup
+
+I've gotten the ESP32 plugged in with a data-enabled cable. We can see it
+
+#+begin_src shell
+  ls -l /dev/ttyUSB0
+#+end_src
+
+#+RESULTS:
+: crw-rw---- 1 root dialout 188, 0 Jun 18 20:39 /dev/ttyUSB0
+
+This is a linux convention and we need to add ourselves to the dialout group
+
+#+begin_src shell :results silent :prologue ""
+  sudo usermod -aG dialout gmauer
+#+end_src
+
+NOTE that this only takes effect after a call to ~setgroups()~ which typically happens during login. For that reason, I'm calling it directly with ~newgrp dialout~ as part of every shell block. That can be removed from our header args if need me
+
+Sounds like we need espflash if we want to use rust to flash the esp32
+
+#+begin_src shell :results silent
+  cargo install espflash --locked
+#+end_src
+
+#+begin_src shell
+  espflash board-info
+#+end_src
+
+#+RESULTS:
+#+begin_example
+Chip type:         esp32c3 (revision v1.1)
+Crystal frequency: 40 MHz
+Flash size:        4MB
+Features:          WiFi, BLE
+MAC address:       a0:f2:62:0c:84:88
+
+Security Information:
+=====================
+Flags: 0x00000000 (0)
+Key Purposes: [0, 0, 0, 0, 0, 0, 12]
+Chip ID: 5
+API Version: 7
+Secure Boot: Disabled
+Flash Encryption: Disabled
+SPI Boot Crypt Count (SPI_BOOT_CRYPT_CNT): 0x0
+
+#+end_example
+
+So the board is an *ESP32-C3* (RISC-V core), as ordered. Note the bridge chip is a CP210x (showing up as =/dev/ttyUSB0=) rather than the native USB you'd expect on some C3 boards -- doesn't matter, the fact that it works is what counts.
+
+Why the C3 being RISC-V matters for Rust: it uses the *stock upstream Rust* toolchain (target =riscv32imc-unknown-none-elf=). The older Xtensa ESP32 would have required Espressif's forked compiler via =espup=. We dodged that.
+
+** Choosing no_std
+
+Two flavors of embedded Rust for the ESP32:
+
+- =no_std= (bare metal) via *esp-hal* -- no OS, direct hardware access. The mainstream, best-supported path for the C3 and what =esp-generate= scaffolds.
+- =std= via *esp-idf-hal* -- runs on top of Espressif's ESP-IDF C framework, giving threads/heap/full networking more easily, at the cost of a much heavier toolchain.
+
+Going with *no_std + esp-hal*. It's the natural fit for the interrupt-timing precision the mic TDOA work needs, and it's the better-documented path.
+
+Important: =no_std= does *not* mean giving up WiFi/Bluetooth. =no_std= is about not having the standard library (heap/threads/filesystem), not about radios. On esp-hal, WiFi + BLE work in =no_std= via the *esp-wifi* crate, and pairing with *embassy* (an embedded async runtime) lets a radio task run alongside motor/mic tasks concurrently with no OS. So browser/phone control can be added later without switching off this base. =esp-generate= can include esp-wifi + embassy from the start, so we don't paint ourselves into a corner.
+
+** Toolchain + scaffolding install
+
+Add the RISC-V target and the project generator. =esp-generate= is Espressif's scaffolding tool -- it builds a no_std project skeleton with the right config (linker, =cargo run= flashing via espflash, optional esp-wifi/embassy).
+
+add the toolchain and stdlib to compile to risc-v
+
+#+begin_src shell
+  rustup target add riscv32imc-unknown-none-elf
+#+end_src
+
+#+RESULTS:
+
+and a command line tool
+
+#+begin_src shell :results silent
+  cargo install esp-generate --locked
+#+end_src
+
+** DONE Always on LED from constant voltage
+CLOSED: [2026-06-19 Fri 14:48]
+
+Using [[https://esp32.co.uk/esp32-c3-devkitm-1-pinout-diagram-and-safe-gpios-boot-pins-adc-i2c-spi/][the pinout]] I connected 3v across an old white led and 330 ohm resistor. It glows!
+
+** DONE Blink
+CLOSED: [2026-06-19 Fri 14:48]
+
+Time to make the LED do something.
+
+*** Scaffolding the project
+Going with *GPIO3* -- a clean general-purpose pin, not a strapping/boot pin (those are GPIO2/8/9), and not
+tied to the flash or USB lines.
+
+Now scaffold a =no_std= project with =esp-generate=. We go with *embassy* from the start for async. =defmt= gives us structured logging over the serial
+link and =esp-backtrace= prints a backtrace on panic. =embassy= depends on =unstable-hal= (it uses esp-hal APIs not yet stabilised), so that has to be passed explicitly too.
+
+=--headless= skips the interactive TUI so the options are reproducible here. It generates into a subdir for us
+
+#+begin_src shell :results silent
+  esp-generate --headless --skip-update-check -c esp32c3 \
+      -o unstable-hal -o embassy -o defmt -o esp-backtrace \
+      -O . firmware-blinker
+#+end_src
+
+
+*** The code
+
+Replace the hello-world loop body with a real pin. =Output::new= takes the GPIO3 peripheral, an initial level, and a config; =Level::Low= starts the LED off:
+
+#+begin_src rust
+  let mut led = Output::new(peripherals.GPIO3, Level::Low, OutputConfig::default());
+
+  loop {
+      led.toggle();
+      Timer::after(Duration::from_millis(500)).await;
+  }
+#+end_src
+
+*** Flashing it
+
+=esp-generate= wired =cargo run= to flash via espflash (see =.cargo/config.toml= runner) and then open the serial monitor, so flashing is just =cargo run= from inside =firmware/=. First build is slow (compiles the whole HAL); later ones are quick.
+
+#+begin_src shell :dir firmware-blinker
+    cargo run --release 2>&1
+#+end_src
+
+#+RESULTS:
+#+begin_example
+    Finished `release` profile [optimized + debuginfo] target(s) in 0.06s
+     Running `espflash flash --monitor --chip esp32c3 --log-format defmt target/riscv32imc-unknown-none-elf/release/firmware`
+[2026-06-19T04:07:35Z INFO ] Serial port: '/dev/ttyUSB0'
+[2026-06-19T04:07:35Z INFO ] Connecting...
+[2026-06-19T04:07:35Z INFO ] Using flash stub
+Chip type:         esp32c3 (revision v1.1)
+Crystal frequency: 40 MHz
+Flash size:        4MB
+Features:          WiFi, BLE
+MAC address:       a0:f2:62:0c:84:88
+App/part. size:    93,248/4,128,768 bytes, 2.26%
+[2026-06-19T04:07:39Z INFO ] Flashing has completed!
+Commands:
+    CTRL+R    Reset chip
+    CTRL+C    Exit
+
+ESP-ROM:esp32c3-eco7-20230720
+Error:   × Failed to initialize input reader
+
+#+end_example
+
+and boom, blinking
+
+** DONE LED on when a noise is heard on one mic
+CLOSED: [2026-06-19 Fri 14:48]
+
+We're just going to turn on the LED when there's a noise on the mic. That's it
+
+So set up our workspace for code
+
+#+begin_src shell :results silent
+  esp-generate --headless --skip-update-check -c esp32c3 \
+      -o unstable-hal -o embassy -o defmt -o esp-backtrace \
+      -O . firmware-listener
+#+end_src
+
+Write our code into [[./firmware-listener/src/bin/main.rs][main.rs]]
+
+
+Wire in the microphone module with D0 wired to GPI4 and out LED wired to GPIO3 and
+
+#+begin_src shell :dir firmware-listener
+    cargo run --release 2>&1
+#+end_src
+
+Note that with these KY-038 modules, you might have to twist the screw in the pot for a while to find the sensitivity balance. The leftmost onboard light is wired to on when D0 is high. "More sensitivity" is turning the pot clockwise.
+
+** Two mic modules and detecting left or right
+
+I now have two microphone modules both tuned to trigger D0 on a clap. Now I want to use them to detect whether the sound is coming from the left or the right. Due to space constraints on my breadboard I can only have them about 5cm apart.
+
+Set up our workspace for code
+
+#+begin_src shell :results silent
+  esp-generate --headless --skip-update-check -c esp32c3 \
+      -o unstable-hal -o embassy -o defmt -o esp-backtrace \
+      -O . firmware-left-or-right
+#+end_src
+
+*** The approach
+
+The near mic hears the clap first. So: race both D0 rising edges with embassy's =select=, timestamp whichever wins, then wait (bounded by a timeout) for the other edge and timestamp that too. The gap (=Δt=) tells us which side and by hpw much.
+
+At 5cm spacing the *largest physically possible* arrival difference is only =0.05 / 343 ≈ 146 µs=, and that's for sound coming dead sideways. Two cheap KY-038 modules jitter by tens of µs on their own, so we don't pretend to resolve an angle -- we report just three states: *LEFT*, *RIGHT*, and *CENTER* (=Δt= below a deadband, too small to trust). Good enough: the real robot only needs a coarse "which way" vote per clap and corrects over repeated claps.
+
+Code is in [[./firmware-left-or-right/src/bin/main.rs][main.rs]]. The tunables live at the top:
+- =CENTER_DEADBAND_US= (60) -- below this |Δt|, call it CENTER. Clap from known left/right, watch the logged deltas, and set this just above the spread you see from center claps.
+- =BLANKING_MS= (200) -- ignore echoes/chatter after each clap.
+- =PAIR_TIMEOUT_MS= (50) -- how long to wait for the second mic before reporting on just the first.
+
+*** Wiring
+
+- LEFT mic D0 on *GPIO4* (where the single mic lived)
+- RIGHT mic D0 goes to *GPIO5*.
+- LED on *GPIO3*.
+
+
+*** Deploy
+
+#+begin_src shell :dir firmware-left-or-right
+    cargo run --release 2>&1
+#+end_src
+
+The LED encodes each decision: *1 blink* = left, *2 blinks* = right, *1 long solid pulse* = center. The serial log prints the actual µs delta per clap (=near=Left by 87us=) -- that's the tuning guide for the deadband.
+
+It works!
