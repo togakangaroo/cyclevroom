@@ -616,7 +616,8 @@ Wire in the microphone module with D0 wired to GPI4 and out LED wired to GPIO3 a
 
 Note that with these KY-038 modules, you might have to twist the screw in the pot for a while to find the sensitivity balance. The leftmost onboard light is wired to on when D0 is high. "More sensitivity" is turning the pot clockwise.
 
-** Two mic modules and detecting left or right
+** DONE Two mic modules and detecting left or right
+CLOSED: [2026-06-20 Sat 14:48]
 
 I now have two microphone modules both tuned to trigger D0 on a clap. Now I want to use them to detect whether the sound is coming from the left or the right. Due to space constraints on my breadboard I can only have them about 5cm apart.
 
@@ -655,3 +656,92 @@ Code is in [[./firmware-left-or-right/src/bin/main.rs][main.rs]]. The tunables l
 The LED encodes each decision: *1 blink* = left, *2 blinks* = right, *1 long solid pulse* = center. The serial log prints the actual µs delta per clap (=near=Left by 87us=) -- that's the tuning guide for the deadband.
 
 It works!
+
+** TODO Move in a rectangle
+
+Ok, we have sourced all our things things, we have a prototype chassis with a foam block assembled. We have the wheels connected to motors via the adapter mounted into the foam chassis along with a power supply and the motor controller. Time to do our next test - make it drive! The point being just to prove out that we can control the wheels, figure out speed, and test out the different forms of motion.
+
+In support of that, what I would like is to make it drive a rightward rectangle going slowly straight for 1sec, turning 90 degrees to the right, going straight for half a second, turning right again for 1 sec, then turning right one more time for half a second. Then, turn 180 degrees around then do a leftward-turning rectangle.
+
+
+Set up our workspace for code
+
+#+begin_src shell :results silent
+  esp-generate --headless --skip-update-check -c esp32c3 \
+      -o unstable-hal -o embassy -o defmt -o esp-backtrace \
+      -O . moving
+#+end_src
+
+*** L298N pinout and wiring
+
+The L298N board exposes, per channel: two direction inputs and one enable input.
+
+| L298N pin | Role                                    |
+|-----------+-----------------------------------------|
+| ENA       | Channel A enable / PWM speed (motor A)  |
+| IN1, IN2  | Channel A direction (motor A)           |
+| IN3, IN4  | Channel B direction (motor B)           |
+| ENB       | Channel B enable / PWM speed (motor B)  |
+| OUT1,OUT2 | Motor A leads                           |
+| OUT3,OUT4 | Motor B leads                           |
+| +12V      | Motor supply in (our ~7.4V from 18650s) |
+| GND       | Common ground (battery *and* ESP32)     |
+| +5V       | 5V *out* from onboard regulator         |
+
+Direction truth table (per channel): =(IN1,IN2) = (H,L)= spins one way, =(L,H)=
+the other, =(L,L)= brakes. "Forward" vs "reverse" depends on which way the motor
+leads are soldered -- if a wheel runs backwards, swap that motor's two OUT leads.
+
+*ENA/ENB jumpers:* pull the two shunt jumpers off the board so the ESP32 can
+drive ENA/ENB with PWM for speed control (with them on, enables are tied HIGH =
+full speed only).
+
+*Power:* battery + to =+12V=, battery - to =GND=. Tie the ESP32 GND to that same
+=GND= (shared ground is mandatory or the logic levels are meaningless). We do
+*not* feed the L298N =+5V= out into the ESP32 here -- the ESP32 is still on USB
+during this bench test. Do not power the ESP32 from motor USB and the L298N 5V at
+the same time.
+
+*ESP32-C3 → L298N pin map* (all clean GPIOs; the C3 strapping pins are 2/8/9,
+none of which we use -- GPIO0 is a plain GPIO on the C3, unlike the classic ESP32
+where it's a boot pin):
+
+| Signal        | ESP32-C3 | L298N |
+|---------------+----------+-------|
+| Left speed    | GPIO0    | ENA   |
+| Left dir 1    | GPIO1    | IN1   |
+| Left dir 2    | GPIO10   | IN2   |
+| Right dir 1   | GPIO7    | IN3   |
+| Right dir 2   | GPIO5    | IN4   |
+| Right speed   | GPIO6    | ENB   |
+| Ground        | GND      | GND   |
+
+*** The code
+
+Code is in [[./moving/src/bin/main.rs][main.rs]]. Speed comes from the ESP32's LEDC (hardware PWM)
+peripheral driving ENA/ENB; direction from the four IN pins. A =Motor= struct
+wraps one enable channel + its two direction pins with =forward/reverse/stop=,
+and movement primitives (=straight=, =spin=) compose those. =drive_rectangle=
+runs the leg/turn choreography.
+
+Because there are no encoders, everything is dead-reckoned by *time* -- the
+tunables at the top set leg durations and turn durations. Expect to twiddle:
+- =DRIVE_DUTY= (40%) / =TURN_DUTY= (50%) -- if a wheel stalls, raise its duty;
+  below ~30% the motors may not overcome stiction.
+- =TURN_90_MS= (600) -- watch a spin and adjust until it lands near a right
+  angle. The 180 about-face is just =2 * TURN_90_MS=.
+- =LONG_LEG_MS= / =SHORT_LEG_MS= -- the straight distances.
+
+The two motors won't spin at identical RPM (~20% mismatch is known and fine at
+this stage -- the real robot corrects via mic votes, not dead-reckoning), so the
+rectangle will drift. That's expected; this test is just proving wheel control,
+speed, and the motion primitives.
+
+*** Deploy
+
+#+begin_src shell :dir moving
+    cargo run --release 2>&1
+#+end_src
+
+The bot waits 2s (so you can set it down), traces a rightward rectangle, does a
+180, then traces a leftward rectangle, and parks braked.
