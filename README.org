@@ -500,6 +500,8 @@ Two flavors of embedded Rust for the ESP32:
 
 Going with *no_std + esp-hal*. It's the natural fit for the interrupt-timing precision the mic TDOA work needs, and it's the better-documented path.
 
+(Update: this held through the mic and motor steps, but once WiFi + OTA entered the picture the math changed -- see [[*Going wireless: switching to std Rust][Going wireless]] below.)
+
 Important: =no_std= does *not* mean giving up WiFi/Bluetooth. =no_std= is about not having the standard library (heap/threads/filesystem), not about radios. On esp-hal, WiFi + BLE work in =no_std= via the *esp-wifi* crate, and pairing with *embassy* (an embedded async runtime) lets a radio task run alongside motor/mic tasks concurrently with no OS. So browser/phone control can be added later without switching off this base. =esp-generate= can include esp-wifi + embassy from the start, so we don't paint ourselves into a corner.
 
 ** Toolchain + scaffolding install
@@ -696,11 +698,22 @@ leads are soldered -- if a wheel runs backwards, swap that motor's two OUT leads
 drive ENA/ENB with PWM for speed control (with them on, enables are tied HIGH =
 full speed only).
 
-*Power:* battery + to =+12V=, battery - to =GND=. Tie the ESP32 GND to that same
-=GND= (shared ground is mandatory or the logic levels are meaningless). We do
-*not* feed the L298N =+5V= out into the ESP32 here -- the ESP32 is still on USB
-during this bench test. Do not power the ESP32 from motor USB and the L298N 5V at
-the same time.
+*Power:* this test drives around untethered, so the *whole robot runs off the
+battery* -- no USB. Battery + to =+12V=, battery - to =GND=. The L298N's onboard
+regulator turns that into a clean 5V on its =+5V= pin, which we feed into the
+ESP32-C3's =5V= pin to power the board. Ground is shared automatically through
+the L298N =GND= (mandatory or the logic levels are meaningless).
+
+The onboard regulator holds 5V as long as the 12V input is above ~7V, which our
+~7.4V pack clears. Before connecting the C3, verify ~5V on the =+5V= pin with a
+multimeter.
+
+(The ENA/ENB jumpers are separate and unrelated to the regulator -- pull them, as
+called out below, so the C3 can PWM the enables for speed control.)
+
+⚠ *Do not plug in USB while the L298N 5V is feeding the board* -- two supplies
+fighting on the same rail. Battery 5V and USB are mutually exclusive: unplug USB
+before you connect the L298N =+5V=.
 
 *ESP32-C3 → L298N pin map* (all clean GPIOs; the C3 strapping pins are 2/8/9,
 none of which we use -- GPIO0 is a plain GPIO on the C3, unlike the classic ESP32
@@ -714,6 +727,7 @@ where it's a boot pin):
 | Right dir 1   | GPIO7    | IN3   |
 | Right dir 2   | GPIO5    | IN4   |
 | Right speed   | GPIO6    | ENB   |
+| Board power   | 5V       | +5V   |
 | Ground        | GND      | GND   |
 
 *** The code
@@ -743,5 +757,141 @@ speed, and the motion primitives.
     cargo run --release 2>&1
 #+end_src
 
-The bot waits 2s (so you can set it down), traces a rightward rectangle, does a
-180, then traces a leftward rectangle, and parks braked.
+Flash over USB first (=cargo run= flashes then starts a monitor -- kill the
+monitor once you see it boot). Then *unplug USB* and connect the L298N =+5V= to
+the C3 =5V= pin: the firmware is already in flash, so on battery power the board
+boots straight into =main=. The bot waits 2s (so you can set it down), traces a
+rightward rectangle, does a 180, then traces a leftward rectangle, and parks
+braked.
+
+** TODO Going wireless: switching to std Rust
+
+First assembled run: powered up on battery, L298N and C3 LEDs lit... nothing
+moved. (One known gap -- I was short a jumper wire for ENA, so the left wheel
+was expected dead. The right one wasn't.) Debugging this means iterating, and
+here's the rub: the C3 sits up against the wheel so *plugging in USB means
+pulling the board out*. Every flash cycle is a partial disassembly.
+
+So before debugging the wiring, fix the iteration loop. The plan:
+
+- *Stage 1: WiFi + a TCP command server.* The firmware joins the home network
+  and listens on a port; from a laptop (netcat) we can drive each wheel
+  individually, run diagnostics (alternate wheels while poking wires), trigger
+  the rectangle routine, and live-tune the timing constants -- no re-flash.
+- *Stage 2: OTA re-flashing*, for when the code itself needs to change.
+
+*** Why std now
+
+The [[*Choosing no_std][original no_std choice]] was right for the GPIO/timing steps, but WiFi + OTA
+flips the trade. In no_std, WiFi means hand-wiring =esp-radio= + =embassy-net= +
+=smoltcp= against sparsely documented APIs, and OTA means building your own
+image-receive path and rollback logic. The =std= flavor (=esp-idf-hal= /
+=esp-idf-svc=) runs on Espressif's ESP-IDF C framework underneath, which turns
+all of that into supported product: =EspWifi= for the connection, plain
+=std::net::TcpListener= for the server, =EspOta= wrapping ESP-IDF's tested
+dual-slot OTA + rollback, and NVS flash storage for free (tuned constants can
+persist across reboots).
+
+The price is a much heavier toolchain: the first build downloads and compiles
+ESP-IDF itself (a gig or so, tens of minutes). One-time
+tax. The C3 being RISC-V spares us the forked-Xtensa-compiler pain -- plain
+upstream nightly works.
+
+Earlier steps stay no_std; each step is its own crate, so nothing breaks.
+
+*** Toolchain install
+
+ESP-IDF's target (=riscv32imc-esp-espidf=) is Tier 3 -- no prebuilt std, so
+cargo builds std from source (=build-std=), which needs *nightly* plus the
+=rust-src= component:
+
+#+begin_src emacs-lisp :results silent
+  (async-shell-command "rustup toolchain install nightly --component rust-src"
+                       "*rustup-nightly*")
+#+end_src
+
+Two build tools: =cargo-generate= (the scaffolder the esp-idf-template uses)
+and =ldproxy= (a linker shim that forwards to ESP-IDF's real linker --
+required by all esp-idf builds). espflash we already have.
+
+#+begin_src emacs-lisp :results silent
+  (async-shell-command "cargo install cargo-generate ldproxy --locked"
+                       "*cargo-install-tools*")
+#+end_src
+
+ESP-IDF's own install scripts run under python, so =python3= + =pip= + =venv=
+must exist on the host (they do). Everything else -- cmake, ninja, the C
+toolchain -- embuild installs privately during the first build. (The generated
+config sets =ESP_IDF_TOOLS_INSTALL_DIR = "workspace"=, so it all lands in
+=moving-wifi/.embuild/= rather than the =~/.espressif= default --
+self-contained; deleting the project dir deletes the toolchain with it.)
+
+*** Scaffolding the project
+
+Scaffold the std project from Espressif's template ([[https://github.com/esp-rs/esp-idf-template][esp-rs/esp-idf-template]] --
+same esp-rs org as esp-hal/esp-generate; this is the std-flavor scaffolder).
+The repo publishes no tags, so pin the commit rev for reproducibility
+(master HEAD as of 2026-07-07). =-d mcu=esp32c3 -d advanced=false= answers
+the prompts headlessly (advanced=false takes the defaults: latest stable
+ESP-IDF v5, no devcontainer):
+
+#+begin_src shell :results silent
+  cargo generate --git https://github.com/esp-rs/esp-idf-template \
+        --rev 6f092f06c8cef93a41b82b4d5c7373446e9fcf1b cargo \
+        --name moving-wifi -d mcu=esp32c3 -d advanced=false
+#+end_src
+
+The generated =rust-toolchain.toml= pins nightly, so commands run inside the
+project dir pick the right toolchain automatically.
+
+*** Hello world = the wheel-cycle diagnostic
+
+Instead of flashing the template's literal hello-world, the first flash *is*
+the wiring-debug program: cycle each wheel through each direction, one at a
+time, forever -- *left fwd → left rev → right fwd → right rev* -- 1.5s runs
+with braked 0.7s gaps. Sit next to the exposed wiring and watch which phases
+produce motion.
+
+Code is in [[./moving-wifi/src/main.rs][main.rs]]. Same pin map and =Motor= truth-table logic as the
+no_std =moving= firmware, ported to =esp-idf-hal= (=LedcDriver= for the
+enable-pin PWM, =PinDriver= for direction). Being std, delays are just
+=std::thread::sleep= -- no async runtime needed yet.
+
+One addition: *GPIO3 drives an indicator LED* (same pin as the earlier LED
+steps: GPIO3 → 330R → LED → GND) that is HIGH whenever the *right* wheel is
+commanded to turn. That splits the debugging cleanly: LED on + wheel still =
+wiring problem; LED never comes on = code/boot problem.
+
+*** First build + flash
+:PROPERTIES:
+:header-args+: :dir moving-wifi
+:END:
+
+The first =cargo build= is the big one -- it clones ESP-IDF v5.5.3 (pinned in
+=.cargo/config.toml=), installs its tools under =moving-wifi/.embuild=, and
+compiles the whole framework. Go make coffee. Subsequent builds are
+normal-speed.
+
+We will need to embed wifi in the build here.
+
+#+begin_src emacs-lisp  :results silent :var wifi-sid="Mundo Macundo" :var wifi-pass=(password-read "Wifi password: ")
+  (async-shell-command (format "bash -c 'WIFI_SSID=\"%s\" WIFI_PASS=\"%s\" cargo build 2>&1 | tee .build.log'" wifi-sid wifi-pass)
+                       "*moving-wifi-build*")
+#+end_src
+
+Then flash the template's hello-world over USB (board is out of the chassis
+anyway) to prove the whole pipeline before writing any real code:
+
+#+begin_src emacs-lisp :results silent :var wifi-sid="Mundo Macundo" :var wifi-pass=(password-read "Wifi password: ")
+  (async-shell-command "cargo run" "*moving-wifi-flash*")
+#+end_src
+
+Expect the same benign =Failed to initialize input reader= monitor error as
+the earlier steps; the flash itself completes before that.
+
+*** Next
+
+With the pipeline proven: Stage 1 firmware -- WiFi station (credentials via
+=env!()= build-time env vars, *never committed*), TCP command server with
+per-wheel control + wheel-alternation diagnostic + rectangle routine + live
+constant tuning -- then back into the foam for the wiring debug, untethered.
