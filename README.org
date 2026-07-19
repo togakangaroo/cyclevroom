@@ -879,19 +879,131 @@ We will need to embed wifi in the build here.
                        "*moving-wifi-build*")
 #+end_src
 
-Then flash the template's hello-world over USB (board is out of the chassis
-anyway) to prove the whole pipeline before writing any real code:
+Then flash the wheel-cycle diagnostic over USB (board is out of the chassis
+anyway) to prove the whole pipeline before writing the networked firmware.
+=cargo run= re-reads =WIFI_SSID=/=WIFI_PASS= too (cargo fingerprints the env
+vars =env!()= reads, so a mismatched/missing value forces a rebuild rather
+than silently reusing a stale binary) -- doesn't matter yet since this
+firmware has no wifi, but keep passing them so the flow is identical once it
+does:
 
 #+begin_src emacs-lisp :results silent :var wifi-sid="Mundo Macundo" :var wifi-pass=(password-read "Wifi password: ")
-  (async-shell-command "cargo run" "*moving-wifi-flash*")
+  (async-shell-command (format "bash -c 'WIFI_SSID=\"%s\" WIFI_PASS=\"%s\" cargo run'" wifi-sid wifi-pass)
+                       "*moving-wifi-flash*")
 #+end_src
 
 Expect the same benign =Failed to initialize input reader= monitor error as
 the earlier steps; the flash itself completes before that.
 
+Confirmed on the bench over serial: boots straight into
+=app_main= and logs =wheel cycle diagnostic: L-fwd, L-rev, R-fwd, R-rev,
+repeat=, then cycles phases every ~2.2s exactly on schedule. Firmware and
+pin-driver code are solid -- any no-motion / no-LED symptom from here is
+wiring, not code (see the git history on [[./moving-wifi/src/main.rs][main.rs]] for that debugging pass).
+
+** TODO Stage 1: WiFi command server
+
+With a proven build/flash pipeline, replace the fixed wheel-cycle loop with a
+WiFi station connection plus a line-delimited TCP command server -- solves the
+actual problem (board is USB-inaccessible once seated in the chassis) and adds
+live tuning of the drive constants without a reflash.
+
+*** The approach
+
+Code is in [[./moving-wifi/src/main.rs][main.rs]]. Three additions on top of the diagnostic firmware:
+
+- *WiFi station connect* -- =esp_idf_svc::wifi::{BlockingWifi, EspWifi}=,
+  configured from =embedded_svc::wifi::{ClientConfiguration, Configuration}=.
+  Blocks until DHCP hands back an IP, then logs it. Modeled directly on the
+  official =esp-idf-svc= =wifi.rs= example.
+- *TCP command server* -- plain =std::net::TcpListener= on port 7878, one
+  client at a time, line-in/line-out. Netcat-friendly: =nc <ip> 7878=.
+- *Live-tunable constants* -- =DRIVE_DUTY=, =TURN_DUTY=, =LONG_LEG_MS=,
+  =SHORT_LEG_MS=, =TURN_90_MS=, =SETTLE_MS= moved from =const= to
+  =AtomicU32= statics, settable at runtime via =set <key> <value>= and
+  readable via =get=. (=u32= not =u64= -- the C3 target doesn't have
+  =AtomicU64=; milliseconds comfortably fit in 32 bits.)
+
+Commands:
+
+| Command                       | Effect                                                                     |
+|--------------------------------+-----------------------------------------------------------------------------|
+| =left <fwd/rev/stop> [duty]=  | Drive the left wheel directly, optional duty override                     |
+| =right <fwd/rev/stop> [duty]= | Same, right wheel (drives the GPIO3 indicator)                            |
+| =stop=                        | Brake both wheels                                                         |
+| =alt [ms]=                    | One lap of L-fwd/L-rev/R-fwd/R-rev -- the wiring-debug mode, now over wifi |
+| =rect=                        | Run the full rectangle+180+rectangle routine                              |
+| =set <key> <value>=           | Live-tune a constant (=drive_duty=, =turn_duty=, =long_leg_ms=, =short_leg_ms=, =turn90_ms=, =settle_ms=) |
+| =get=                         | Print current constant values                                             |
+| =help=                        | List commands                                                             |
+
+*Known limitation:* the server handles one client on its own thread inside a
+blocking accept loop, and =rect=/=alt= run to completion holding the motor
+lock -- there's no way to interrupt a running routine from another connection,
+and a dropped connection mid-=rect= doesn't brake until the sleep-based
+sequence finishes. Fine for bench tuning; a real e-stop would need a separate
+control thread signaled over a channel, which is more than this stage needs.
+
+*** Gotcha: =TcpStream::try_clone()= panics on ESP-IDF
+
+First working version split each connection into a cloned reader/writer pair
+(=stream.try_clone()=, the common std pattern) -- it compiled fine and ran
+fine right up until the first byte came in over the socket, then panicked:
+
+#+begin_example
+thread 'main' (1) panicked at src/main.rs:274:41:
+called `Result::unwrap()` on an `Err` value: Os { code: 88, kind: Unsupported, message: "Function not implemented" }
+#+end_example
+
+Error 88 is =ENOSYS=. =TcpStream::try_clone= is backed by =dup()= on the fd,
+and ESP-IDF's lwIP socket layer doesn't implement it -- works identically on
+desktop Linux/macOS, silently unsupported on-device, only surfaces the moment
+a real client connects (not at boot, not from =cargo check=). Fix: keep one
+owned =TcpStream=, wrap it in a =BufReader= for line reads, and write back
+through =BufReader::get_mut()= instead of a cloned handle.
+
+(An earlier red herring along the way: a stale panic trace pointed at
+=heapless::String<32>::try_from=, which briefly looked like an oversized wifi
+password or an oversized =log::info!= argument. It was leftover stack
+content from an older crash, not the live one -- worth remembering that
+espflash's monitor buffer can carry forward old panic dumps that look live.)
+
+*** Credentials
+
+Per the earlier security call: SSID/password are compiled in via =env!()= and
+must never be committed. =main.rs= reads =env!("WIFI_SSID")= /
+=env!("WIFI_PASS")=; the org-babel blocks below prompt for the password at
+run time (=password-read=, never written to disk) and pass both through the
+environment of the =cargo= invocation only.
+
+*** Deploy
+:PROPERTIES:
+:header-args+: :dir moving-wifi
+:END:
+
+Flash over USB (board out of the chassis) with real credentials:
+
+#+begin_src emacs-lisp :results silent :var wifi-sid="Mundo Macundo" :var wifi-pass=(password-read "Wifi password: ")
+  (async-shell-command (format "bash -c 'WIFI_SSID=\"%s\" WIFI_PASS=\"%s\" cargo run'" wifi-sid wifi-pass)
+                       "*moving-wifi-flash*")
+#+end_src
+
+Watch the serial log for =wifi up, ip=...= and =command server listening on
+port 7878=, then from a laptop on the same network:
+
+#+begin_src shell :results silent
+  nc <board-ip> 7878
+#+end_src
+
+=help= lists commands; =get= shows current tuning.
+
+*Confirmed working:* connects to wifi, gets a DHCP lease, accepts a netcat
+connection, and answers =help= without crashing. Next: drive the wheels
+through the command port on the bench, then reseat in the chassis and iterate
+untethered.
+
 *** Next
 
-With the pipeline proven: Stage 1 firmware -- WiFi station (credentials via
-=env!()= build-time env vars, *never committed*), TCP command server with
-per-wheel control + wheel-alternation diagnostic + rectangle routine + live
-constant tuning -- then back into the foam for the wiring debug, untethered.
+Stage 2 (deferred): OTA re-flashing via =EspOta=, once Stage 1 is proven
+solid over a few sessions of live tuning and the pain of occasional
+structural-code USB reflashes actually justifies the added complexity.
