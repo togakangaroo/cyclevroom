@@ -38,12 +38,12 @@ const DRIVE_DUTY: u8 = 40;
 
 /// Turn speed. In-place spins fight more friction (both wheels scrubbing
 /// sideways), so give them a bit more push than the straights.
-const TURN_DUTY: u8 = 50;
+const TURN_DUTY: u8 = 73;
 
 /// Long straight leg of the rectangle.
-const LONG_LEG_MS: u64 = 1000;
+const LONG_LEG_MS: u64 = 1500;
 /// Short straight leg of the rectangle.
-const SHORT_LEG_MS: u64 = 500;
+const SHORT_LEG_MS: u64 = 1000;
 
 /// How long an in-place 90-degree spin takes at TURN_DUTY. Pure guess to start
 /// -- watch the bot and adjust until a spin lands near a right angle. A 180 is

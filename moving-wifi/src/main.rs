@@ -1,7 +1,7 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::TcpListener;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Mutex;
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::sleep;
 use std::time::Duration;
 
@@ -33,16 +33,34 @@ const COMMAND_PORT: u16 = 7878;
 // now live-tunable over the `set` command instead of baked in at compile
 // time -- these are the starting values.
 
-static DRIVE_DUTY: AtomicU32 = AtomicU32::new(40);
-static TURN_DUTY: AtomicU32 = AtomicU32::new(50);
-static LONG_LEG_MS: AtomicU32 = AtomicU32::new(1000);
-static SHORT_LEG_MS: AtomicU32 = AtomicU32::new(500);
+static DRIVE_DUTY: AtomicU32 = AtomicU32::new(90);
+static TURN_DUTY: AtomicU32 = AtomicU32::new(73);
+static LONG_LEG_MS: AtomicU32 = AtomicU32::new(1500);
+static SHORT_LEG_MS: AtomicU32 = AtomicU32::new(1000);
 static TURN_90_MS: AtomicU32 = AtomicU32::new(600);
 static SETTLE_MS: AtomicU32 = AtomicU32::new(300);
 
 /// PWM frequency on the L298N enable pins.
 const PWM_FREQ_HZ: u32 = 5000;
 // -------------------------------------------------------------------------
+
+/// Set by `stop` to preempt a long-running routine (`rect`, `alt`) running on
+/// its own thread; those routines poll this in place of a single long sleep
+/// so a queued `stop` line doesn't have to wait for the whole routine to
+/// finish before it's even read. Cleared when a new routine starts.
+static ABORT: AtomicBool = AtomicBool::new(false);
+
+/// Sleep in short slices, bailing out early if ABORT is set. Caller is
+/// responsible for braking afterwards regardless of how the sleep ended.
+fn abortable_sleep(ms: u64) {
+    const SLICE_MS: u64 = 20;
+    let mut remaining = ms;
+    while remaining > 0 && !ABORT.load(Ordering::Relaxed) {
+        let step = remaining.min(SLICE_MS);
+        sleep(Duration::from_millis(step));
+        remaining -= step;
+    }
+}
 
 /// One DC motor behind an L298N channel: a PWM'd enable line (speed) plus two
 /// direction lines. (in1,in2) = (H,L)/(L,H) picks direction, (L,L) brakes.
@@ -129,7 +147,7 @@ impl Rig<'_> {
         let duty = DRIVE_DUTY.load(Ordering::Relaxed);
         self.left_drive(1, duty);
         self.right_drive(1, duty);
-        sleep(Duration::from_millis(ms as u64));
+        abortable_sleep(ms as u64);
         self.stop();
     }
 
@@ -146,15 +164,13 @@ impl Rig<'_> {
                 self.right_drive(1, duty);
             }
         }
-        sleep(Duration::from_millis(ms as u64));
+        abortable_sleep(ms as u64);
         self.stop();
     }
 
     fn settle(&mut self) {
         self.stop();
-        sleep(Duration::from_millis(
-            SETTLE_MS.load(Ordering::Relaxed) as u64
-        ));
+        abortable_sleep(SETTLE_MS.load(Ordering::Relaxed) as u64);
     }
 
     /// One rectangle: long leg, corner, short leg, corner, long leg, corner,
@@ -165,6 +181,9 @@ impl Rig<'_> {
                 LONG_LEG_MS.load(Ordering::Relaxed),
                 SHORT_LEG_MS.load(Ordering::Relaxed),
             ] {
+                if ABORT.load(Ordering::Relaxed) {
+                    return;
+                }
                 self.straight(leg);
                 self.settle();
                 self.spin(turn, TURN_90_MS.load(Ordering::Relaxed));
@@ -173,12 +192,33 @@ impl Rig<'_> {
         }
     }
 
+    /// Tiny fixed-size rectangle run once at boot as a wiring/sanity check --
+    /// deliberately not tied to the tunable LONG_LEG_MS/SHORT_LEG_MS/etc so
+    /// `set` calls made after connecting don't change what runs on the next
+    /// power-up.
+    fn drive_startup_rectangle(&mut self) {
+        const LEG_MS: u32 = 200;
+        const TURN_MS: u32 = 300;
+        for _ in 0..4 {
+            if ABORT.load(Ordering::Relaxed) {
+                return;
+            }
+            self.straight(LEG_MS);
+            self.settle();
+            self.spin(Turn::Right, TURN_MS);
+            self.settle();
+        }
+        self.stop();
+    }
+
     fn drive_full_routine(&mut self) {
         self.drive_rectangle(Turn::Right);
         self.settle();
-        self.spin(Turn::Right, 2 * TURN_90_MS.load(Ordering::Relaxed));
-        self.settle();
-        self.drive_rectangle(Turn::Left);
+        if !ABORT.load(Ordering::Relaxed) {
+            self.spin(Turn::Right, 2 * TURN_90_MS.load(Ordering::Relaxed));
+            self.settle();
+            self.drive_rectangle(Turn::Left);
+        }
         self.stop();
     }
 }
@@ -192,32 +232,38 @@ fn main() {
     let peripherals = Peripherals::take().unwrap();
     let pins = peripherals.pins;
 
-    let pwm_timer = LedcTimerDriver::new(
-        peripherals.ledc.timer0,
-        &TimerConfig::new()
-            .frequency(PWM_FREQ_HZ.Hz())
-            .resolution(Resolution::Bits8),
-    )
-    .unwrap();
+    // Leaked to 'static so `Rig` (and thus the `Mutex<Rig>` shared with the
+    // per-command worker threads spawned for `rect`/`alt`) doesn't carry a
+    // borrow tied to this stack frame -- fine here since it must live for the
+    // life of the program regardless.
+    let pwm_timer: &'static _ = Box::leak(Box::new(
+        LedcTimerDriver::new(
+            peripherals.ledc.timer0,
+            &TimerConfig::new()
+                .frequency(PWM_FREQ_HZ.Hz())
+                .resolution(Resolution::Bits8),
+        )
+        .unwrap(),
+    ));
 
     // Pin map identical to earlier `moving`/`moving-wifi` firmwares.
     let left = Motor {
-        pwm: LedcDriver::new(peripherals.ledc.channel0, &pwm_timer, pins.gpio0).unwrap(),
+        pwm: LedcDriver::new(peripherals.ledc.channel0, pwm_timer, pins.gpio0).unwrap(),
         in1: PinDriver::output(pins.gpio1).unwrap(),
         in2: PinDriver::output(pins.gpio10).unwrap(),
     };
     let right = Motor {
-        pwm: LedcDriver::new(peripherals.ledc.channel1, &pwm_timer, pins.gpio6).unwrap(),
+        pwm: LedcDriver::new(peripherals.ledc.channel1, pwm_timer, pins.gpio6).unwrap(),
         in1: PinDriver::output(pins.gpio7).unwrap(),
         in2: PinDriver::output(pins.gpio5).unwrap(),
     };
     let right_led = PinDriver::output(pins.gpio3).unwrap();
 
-    let rig = Mutex::new(Rig {
+    let rig: Arc<Mutex<Rig<'static>>> = Arc::new(Mutex::new(Rig {
         left,
         right,
         right_led,
-    });
+    }));
 
     log::info!("connecting to wifi ssid={WIFI_SSID}");
     let sys_loop = EspSystemEventLoop::take().unwrap();
@@ -238,6 +284,17 @@ fn main() {
     // Keep wifi alive for the life of the program -- BlockingWifi must not be
     // dropped or the connection tears down.
     let _wifi = wifi;
+
+    // Quick "I'm alive and wired correctly" motion on boot, small enough to
+    // do on a tabletop -- on its own thread so it doesn't hold up accepting
+    // connections, and abortable like any other routine if a client connects
+    // and sends `stop` while it's still running.
+    {
+        let rig = Arc::clone(&rig);
+        std::thread::spawn(move || {
+            rig.lock().unwrap().drive_startup_rectangle();
+        });
+    }
 
     for stream in listener.incoming() {
         let stream = match stream {
@@ -270,7 +327,13 @@ fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>) -> anyhow::Result<()>
 
 /// One client at a time, line-delimited commands, plain text replies. Netcat
 /// friendly: `nc <ip> 7878`.
-fn handle_client(stream: std::net::TcpStream, rig: &Mutex<Rig>) {
+///
+/// `rect`/`alt` are long-running (many seconds of sleeps), so they run on a
+/// detached worker thread instead of blocking this loop -- that keeps this
+/// thread free to read the next line immediately, so a `stop` sent while one
+/// is in progress is read and acted on (via ABORT + an immediate brake)
+/// without waiting for the routine to finish on its own.
+fn handle_client(stream: std::net::TcpStream, rig: &Arc<Mutex<Rig<'static>>>) {
     // lwIP (ESP-IDF's socket layer) doesn't implement dup(), so
     // `TcpStream::try_clone` fails with ENOSYS -- read and write through the
     // one owned stream instead of splitting into cloned reader/writer halves.
@@ -291,13 +354,14 @@ fn handle_client(stream: std::net::TcpStream, rig: &Mutex<Rig>) {
         }
     }
 
-    // Client dropped -- brake so a lost connection never leaves the bot
-    // driving blind.
+    // Client dropped -- signal any in-flight routine to stop and brake so a
+    // lost connection never leaves the bot driving blind.
+    ABORT.store(true, Ordering::Relaxed);
     rig.lock().unwrap().stop();
     log::info!("client disconnected, motors stopped");
 }
 
-fn handle_command(line: &str, rig: &Mutex<Rig>) -> String {
+fn handle_command(line: &str, rig: &Arc<Mutex<Rig<'static>>>) -> String {
     let mut parts = line.split_whitespace();
     let Some(cmd) = parts.next() else {
         return String::new();
@@ -329,6 +393,9 @@ fn handle_command(line: &str, rig: &Mutex<Rig>) -> String {
         }
 
         "stop" => {
+            // Signal any in-flight rect/alt routine to bail out, then brake
+            // immediately -- don't wait for the worker thread to notice.
+            ABORT.store(true, Ordering::Relaxed);
             rig.lock().unwrap().stop();
             "ok stop".into()
         }
@@ -340,29 +407,40 @@ fn handle_command(line: &str, rig: &Mutex<Rig>) -> String {
                 .next()
                 .and_then(|s| s.parse::<u64>().ok())
                 .unwrap_or(1000);
-            let duty = DRIVE_DUTY.load(Ordering::Relaxed);
-            let mut rig = rig.lock().unwrap();
-            for (label, dir, is_right) in [
-                ("left fwd", 1, false),
-                ("left rev", -1, false),
-                ("right fwd", 1, true),
-                ("right rev", -1, true),
-            ] {
-                log::info!("alt: {label}");
-                if is_right {
-                    rig.right_drive(dir, duty);
-                } else {
-                    rig.left_drive(dir, duty);
+            let rig = Arc::clone(rig);
+            ABORT.store(false, Ordering::Relaxed);
+            std::thread::spawn(move || {
+                let duty = DRIVE_DUTY.load(Ordering::Relaxed);
+                let mut rig = rig.lock().unwrap();
+                for (label, dir, is_right) in [
+                    ("left fwd", 1, false),
+                    ("left rev", -1, false),
+                    ("right fwd", 1, true),
+                    ("right rev", -1, true),
+                ] {
+                    if ABORT.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    log::info!("alt: {label}");
+                    if is_right {
+                        rig.right_drive(dir, duty);
+                    } else {
+                        rig.left_drive(dir, duty);
+                    }
+                    abortable_sleep(ms);
+                    rig.stop();
+                    abortable_sleep(200);
                 }
-                sleep(Duration::from_millis(ms));
-                rig.stop();
-                sleep(Duration::from_millis(200));
-            }
+            });
             "ok alt".into()
         }
 
         "rect" => {
-            rig.lock().unwrap().drive_full_routine();
+            let rig = Arc::clone(rig);
+            ABORT.store(false, Ordering::Relaxed);
+            std::thread::spawn(move || {
+                rig.lock().unwrap().drive_full_routine();
+            });
             "ok rect".into()
         }
 
