@@ -659,7 +659,8 @@ The LED encodes each decision: *1 blink* = left, *2 blinks* = right, *1 long sol
 
 It works!
 
-** TODO Move in a rectangle
+** DONE Move in a rectangle
+CLOSED: [2026-09-20 Sun 13:56]
 
 Ok, we have sourced all our things things, we have a prototype chassis with a foam block assembled. We have the wheels connected to motors via the adapter mounted into the foam chassis along with a power supply and the motor controller. Time to do our next test - make it drive! The point being just to prove out that we can control the wheels, figure out speed, and test out the different forms of motion.
 
@@ -901,7 +902,8 @@ repeat=, then cycles phases every ~2.2s exactly on schedule. Firmware and
 pin-driver code are solid -- any no-motion / no-LED symptom from here is
 wiring, not code (see the git history on [[./moving-wifi/src/main.rs][main.rs]] for that debugging pass).
 
-** TODO Stage 1: WiFi command server
+** DONE Stage 1: WiFi command server
+CLOSED: [2026-09-20 Sun 13:56]
 
 With a proven build/flash pipeline, replace the fixed wheel-cycle loop with a
 WiFi station connection plus a line-delimited TCP command server -- solves the
@@ -1007,3 +1009,215 @@ untethered.
 Stage 2 (deferred): OTA re-flashing via =EspOta=, once Stage 1 is proven
 solid over a few sessions of live tuning and the pain of occasional
 structural-code USB reflashes actually justifies the added complexity.
+
+** TODO Putting it together: the full behaviour loop
+
+Everything the prototypes proved out, in one firmware: the two-mic direction
+sensing from [[./firmware-left-or-right/src/bin/main.rs][firmware-left-or-right]], the differential drive and wifi command
+server from [[./moving-wifi/src/main.rs][moving-wifi]], plus the laser. Clap twice and it turns toward you,
+drives at you, waits, and if you stay quiet it paints you with the laser.
+
+Code is in [[./firmware-cyclevroom/src/main.rs][firmware-cyclevroom]].
+
+*** The pin conflict, and how it got resolved
+
+The two prototypes were never wired at the same time, and they collide:
+=moving-wifi= uses *GPIO5* as the right motor's =IN4=, while
+=firmware-left-or-right= uses it for the right mic. Something had to move.
+
+The C3 DevKitM-1 only exposes GPIO0-10 usefully (18/19 are native USB, 20/21
+are the UART carrying the serial log), and *GPIO2/8/9 are strapping pins*.
+Motors need 6 pins, mics 2, laser 1 -- that's 9 of the 11.
+
+The fix: *move the motor, not the mic*. =IN4= goes to GPIO2 and the right mic
+takes GPIO5. GPIO2 being a strapping pin is harmless for =IN4= because it's
+driven as an *output* -- it can't hold the pin low through reset. Putting the
+*mic* on GPIO2 would have been the trap: a KY-038's =D0= idles LOW and the
+LM393 drives it actively, so a powered mic would clamp the strapping pin low
+at reset and *the board wouldn't boot*. (That path was possible with a 1k
+series resistor plus a 10k pull-up to hold GPIO2 high at reset, but moving one
+jumper beats adding two components.)
+
+The old GPIO3 indicator LED is gone -- the laser lives there now. The laser
+*is* the indicator.
+
+| Signal                | ESP32-C3 | Goes to        | Note                        |
+|-----------------------+----------+----------------+-----------------------------|
+| Left speed            | GPIO0    | L298N ENA      |                             |
+| Left dir 1            | GPIO1    | L298N IN1      |                             |
+| Left dir 2            | GPIO10   | L298N IN2      |                             |
+| Right dir 1           | GPIO7    | L298N IN3      |                             |
+| Right dir 2           | GPIO2    | L298N IN4      | *moved off GPIO5*           |
+| Right speed           | GPIO6    | L298N ENB      |                             |
+| Left mic  ("mic1")    | GPIO4    | KY-038 D0      | unchanged                   |
+| Right mic ("mic2")    | GPIO5    | KY-038 D0      | *was the motor's IN4*       |
+| Laser                 | GPIO3    | KY-008 S       | *was the indicator LED*     |
+| Board power           | 5V       | L298N +5V      |                             |
+| Ground                | GND      | L298N GND      |                             |
+
+*Laser wiring:* KY-008 =S= to GPIO3, =+= to 3.3V, =-= to GND. The module has
+its own current limiting, so no transistor. Keep it Class II/IIIa as called out
+above -- the bot points it at whatever it hears.
+
+*Mic spacing:* still ~5cm, as on the breadboard, so the timing constants carry
+over from the left-or-right prototype unchanged.
+
+*** The state machine
+
+The behaviour is a state machine, not a straight-line routine, so it can be
+driven and inspected over the wire while tuning. The transition table lives in
+[[./firmware-cyclevroom/src/machine.rs][machine.rs]] as a pure function -- no I/O, no clock of its own, elapsed time
+arrives as an event -- which is what makes it unit-testable on a laptop.
+
+#+begin_example
+           clap                 2nd clap (direction known)
+ Listening ----> Active ----------------------------------> Turning
+     ^             |                                           |
+     |             | ACTIVE_IDLE_MS                            | TURN_MS
+     +-------------+                                           v
+     |                                                    Approaching
+     |                                                         |
+     |                                                         | APPROACH_MS
+     |          clap                                           v
+     |   Active <----------------------------------------- Armed
+     |      ^                                                  |
+     |      | clap                                             | ARMED_MS
+     |      |                                                  v
+     +--------------------------------------------------- Firing
+           FIRE_AMOUNT pulses
+
+ any state --stop--> Paused --PAUSED_MS--> Listening
+#+end_example
+
+| State         | Does                          | Leaves on                                  |
+|---------------+-------------------------------+--------------------------------------------|
+| =Listening=   | waits, motors braked          | a clap -> =Active=                         |
+| =Active=      | listens for the second clap   | clap -> =Turning=; =ACTIVE_IDLE_MS= -> =Listening= |
+| =Turning=     | spins toward the clap         | =TURN_MS= -> =Approaching=                 |
+| =Approaching= | drives forward                | =APPROACH_MS= -> =Armed=                   |
+| =Armed=       | races the clock vs a clap     | clap -> =Active=; =ARMED_MS= -> =Firing=   |
+| =Firing=      | pulses the laser              | clap -> =Active=; burst done -> =Listening= |
+| =Paused=      | everything off                | =PAUSED_MS= (10s) -> =Listening=           |
+
+*Deaf while driving:* =Turning= and =Approaching= ignore the mics entirely --
+they simply never call the clap listener, so it's true by construction rather
+than by remembering to check. On re-entering a listening state the accumulated
+mic edges are *discarded* rather than the interrupts being disabled: motor
+brush noise absolutely does trip cheap KY-038 modules, and without the drain
+the bot would re-trigger on its own wheels the instant it stopped. (Live
+turning -- steering while still listening -- is the obvious next iteration,
+and relaxing exactly this is where it starts.)
+
+*** Clap timing
+
+Same physics as before: near mic first, and the gap says which side. Mics ~5cm
+apart puts the largest physically-possible gap at =0.05 / 343 ~= 146us=, so we
+report only LEFT / RIGHT / CENTER, never an angle.
+
+The edges are read as *GPIO interrupts*, not polled. The ISR does nothing but
+stamp =esp_timer_get_time()= into an atomic and bump a counter, which keeps the
+~1-2us jitter the math assumes -- a polling loop under FreeRTOS would blur that
+by milliseconds. The state thread polls those published counters at 1ms, which
+costs nothing in precision because the *timestamps* come from the ISR.
+
+*Sign convention:* =mic1= is LEFT, =mic2= is RIGHT, and the reported delta is
+=mic1 - mic2=. So *negative means left heard it first*, i.e. the sound is to
+the left. Every =Active -> Turning= transition writes the number to the
+connected client:
+
+#+begin_example
+delta_us=-87 dir=left
+#+end_example
+
+That's the tuning readout -- clap from a known side, watch the sign and
+magnitude, and set =center_deadband_us= just above the spread you see from
+dead-centre claps.
+
+*** Commands
+
+Same shape as =moving-wifi=: port 7878, line in, line out, =nc <ip> 7878=.
+
+| Command                       | Effect                                              |
+|-------------------------------+-----------------------------------------------------|
+| =state=                       | Report the current state                            |
+| =state <name>=                | Force a transition into any state                   |
+| =stop=                        | Brake, laser off, enter =Paused= immediately        |
+| =left\vert right fwd\vert rev\vert stop [duty]= | Drive one wheel -- wiring debug   |
+| =alt [ms]=                    | One lap of L-fwd/L-rev/R-fwd/R-rev                  |
+| =laser on\vert off\vert fire= | Laser bench test (=fire= runs a full burst)         |
+| =set <key> <value>=           | Live-tune any constant                              |
+| =get=                         | Print every constant                                |
+| =help=                        | List commands                                       |
+
+Tunable keys, with the value each one starts at:
+
+- =drive_duty= (90) -- PWM duty percent both wheels use when driving forward.
+- =turn_duty= (73) -- PWM duty percent both wheels use when spinning in place.
+- =turn_ms= (200) -- how long a =Turning= spin lasts, i.e. how far it turns.
+  The bench run put 90 degrees at 73% duty / 600ms, so ~30 degrees lands near 200.
+- =approach_ms= (1000) -- how long =Approaching= drives forward.
+- =armed_ms= (2000) -- how long =Armed= waits for a clap before it fires.
+- =active_idle_ms= (2000) -- how long =Active= waits for the second clap before
+  giving up and falling back to =Listening=.
+- =fire_amount= (5) -- how many on/off laser pulses one =Firing= burst runs.
+- =fire_on_ms= (1000) -- how long the laser stays on within each pulse.
+- =fire_off_ms= (1000) -- how long the laser stays off between pulses.
+- =paused_ms= (10000) -- how long =Paused= sits halted before resuming.
+- =settle_ms= (300) -- dead time after each spin or drive, letting the chassis
+  stop rocking before the next move or measurement.
+- =center_deadband_us= (60) -- below this |delta|, the two mics fired too close
+  together to trust the ordering, so the clap is called CENTER (dead ahead).
+- =blanking_ms= (200) -- how long to ignore the mics after a clap, so the
+  room's echoes don't register as extra claps.
+- =pair_timeout_ms= (50) -- how long to wait for the second mic after the first
+  one fires before giving up and reporting on the single mic alone.
+
+*Note on async notifications:* the delta line is pushed to the client from the
+state thread, which needs a second handle on the socket -- and
+=TcpStream::try_clone()= is =dup()=-backed, which lwIP doesn't implement (the
+ENOSYS gotcha from Stage 1). Where the clone fails the firmware logs
+=try_clone unsupported= once and carries on; the deltas then ride back on
+command replies instead of arriving unprompted.
+
+*** Tests
+
+The state machine, the direction classifier and the command parser are all
+=esp-idf=-free on purpose, so they build and test on the host:
+
+#+begin_src shell :dir firmware-cyclevroom
+  ./test.sh
+#+end_src
+
+53 tests. The ones that earn their keep: every transition including both
+timeouts and the boundary conditions, =stop= from every state, that
+=Turning=/=Approaching= really do ignore claps (asserted against the table, so
+=listens()= can't drift out of sync with it), that a clap preempts a laser
+burst, and the delta sign convention spelled out as arithmetic -- getting that
+subtraction backwards would send the bot away from the clap, and it's the
+easiest mistake in the whole project to make.
+
+=.cargo/config.toml= pins the build to the C3 target, so =test.sh= runs the
+pure modules against a throwaway host-only manifest rather than fighting it.
+
+*** Deploy
+:PROPERTIES:
+:header-args+: :dir firmware-cyclevroom
+:END:
+
+Flash over USB (board out of the chassis) with real credentials:
+
+#+begin_src emacs-lisp :results silent :var wifi-sid="Mundo Macundo" :var wifi-pass=(password-read "Wifi password: ")
+  (async-shell-command (format "bash -c 'WIFI_SSID=\"%s\" WIFI_PASS=\"%s\" cargo run --release'" wifi-sid wifi-pass)
+                       "*cyclevroom-flash*")
+#+end_src
+
+Watch for =wifi up, ip=...= and =cyclevroom ready, state=listening=, then:
+
+#+begin_src shell :results silent
+  nc <board-ip> 7878
+#+end_src
+
+*Bench-check before putting it on the floor:* =laser fire= (five pulses),
+=alt= (each wheel both ways -- confirms IN4 really did move to GPIO2), then
+=state active= and clap once to watch a =delta_us= line appear with the sign
+you expect.
