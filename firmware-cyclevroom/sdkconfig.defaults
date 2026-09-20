@@ -10,3 +10,9 @@ CONFIG_FREERTOS_IDLE_TASK_STACKSIZE=4096
 # that allocate large stack variables; or better yet - use 
 # `std::thread::Builder::new().stack_size(XXX)` for spawning
 CONFIG_PTHREAD_TASK_STACK_SIZE_DEFAULT=4096
+
+# The mic-edge polling loops sleep 1ms. At the default 100Hz tick that is
+# sub-tick, so usleep() degrades to a busy ets_delay_us() spin that never
+# yields -- which starves IDLE and trips the task watchdog. A 1kHz tick makes
+# the 1ms sleep a real scheduler block.
+CONFIG_FREERTOS_HZ=1000

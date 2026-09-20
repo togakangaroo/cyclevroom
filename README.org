@@ -1049,9 +1049,9 @@ The old GPIO3 indicator LED is gone -- the laser lives there now. The laser
 | Right dir 1        | GPIO7    | L298N IN3 | blue  |                         |
 | Right dir 2        | GPIO2    | L298N IN4 | red   | *moved off GPIO5*       |
 | Right speed        | GPIO6    | L298N ENB | grey  |                         |
-| Left mic  ("mic1") | GPIO4    | KY-038 D0 |       | |
-| Right mic ("mic2") | GPIO5    | KY-038 D0 |       | *was the motor's IN4*   |
-| Laser              | GPIO3    | KY-008 S  |       | *was the indicator LED* |
+| Left mic  ("mic1") | GPIO4    | KY-038 D0 | white |                         |
+| Right mic ("mic2") | GPIO5    | KY-038 D0 | brown | *was the motor's IN4*   |
+| Laser              | GPIO3    | KY-008 S  | white | *was the indicator LED* |
 | Board power        | 5V       | L298N +5V |       |                         |
 | Ground             | GND      | L298N GND |       |                         |
 

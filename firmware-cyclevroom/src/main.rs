@@ -147,6 +147,36 @@ impl MicEdge {
 static LEFT_EDGE: MicEdge = MicEdge::new();
 static RIGHT_EDGE: MicEdge = MicEdge::new();
 
+/// The two mic pin drivers, published so the polling loops can re-arm the
+/// interrupts.
+///
+/// `esp-idf-hal` disables a GPIO interrupt the moment it fires -- deliberately,
+/// so a level-triggered pin can't livelock the ISR -- and re-arming is only
+/// legal from non-ISR context. So the ISR closure cannot do it; whoever
+/// *observes* the edge has to. Without this the mics fire exactly once each
+/// after boot and the bot is deaf forever after.
+static MIC_PINS: Mutex<Option<MicPins>> = Mutex::new(None);
+
+struct MicPins {
+    left: &'static mut PinDriver<'static, Input>,
+    right: &'static mut PinDriver<'static, Input>,
+}
+
+// Safe for the same reason the `Box::leak` above is: these live for the whole
+// program and are only ever touched under the mutex, from normal threads.
+unsafe impl Send for MicPins {}
+
+/// Re-arm both mic interrupts. Idempotent, and cheap enough to call on every
+/// poll pass rather than tracking which side actually fired.
+fn rearm_mics() {
+    if let Ok(mut guard) = MIC_PINS.lock() {
+        if let Some(pins) = guard.as_mut() {
+            let _ = pins.left.enable_interrupt();
+            let _ = pins.right.enable_interrupt();
+        }
+    }
+}
+
 /// Free-running microsecond clock. Wraps every ~71 minutes at u32; deltas are
 /// computed with `wrapping_sub` so a wrap between two edges of the same clap is
 /// still correct.
@@ -177,6 +207,9 @@ fn edge_seq() -> EdgeSeq {
 /// motor brush noise picked up mid-turn would re-trigger the instant we
 /// started listening again.
 fn drain_edges() -> EdgeSeq {
+    // Entry to a listening state is exactly when a one-shot interrupt left
+    // disabled by the previous clap needs to come back.
+    rearm_mics();
     edge_seq()
 }
 
@@ -215,6 +248,9 @@ fn wait_for_edge(since: EdgeSeq, timeout: Duration) -> Option<(Side, u32, EdgeSe
         if Instant::now() >= deadline || ABORT.load(Ordering::Relaxed) {
             return None;
         }
+        // Re-arm while waiting: a spurious edge before the clap we want would
+        // otherwise have left that mic disabled for the rest of the window.
+        rearm_mics();
         sleep(Duration::from_millis(1));
     }
 }
@@ -224,6 +260,10 @@ fn wait_for_edge(since: EdgeSeq, timeout: Duration) -> Option<(Side, u32, EdgeSe
 fn wait_for_pair(near: Side, since: EdgeSeq) -> Option<u32> {
     let timeout = Duration::from_millis(PAIR_TIMEOUT_MS.load(Ordering::Relaxed) as u64);
     let deadline = Instant::now() + timeout;
+    // The near mic's edge disabled *its* interrupt; the far mic may also have
+    // been left disabled by an earlier edge. Re-arm before waiting, or a clap
+    // is permanently seen as single-mic and the delta is never measured.
+    rearm_mics();
     loop {
         let seq = edge_seq();
         let fired = match near {
@@ -753,7 +793,8 @@ fn main() {
     let rig: Arc<Mutex<Rig<'static>>> = Arc::new(Mutex::new(Rig { left, right, laser }));
 
     // Mic interrupts. The LM393 comparator drives D0 actively, so no pull, and
-    // D0 goes HIGH on a clap -- rising edge.
+    // D0 goes HIGH on a clap -- rising edge. (Same as firmware-left-or-right,
+    // which worked on these same pins with the same modules.)
     //
     // Leaked for the same reason as the PWM timer: an ISR subscription must
     // outlive this frame, and `subscribe` is unsafe because the closure runs in
@@ -778,6 +819,12 @@ fn main() {
         }
         mic.enable_interrupt().unwrap();
     }
+
+    // Publish them so the poll loops can re-arm after each edge (see MIC_PINS).
+    *MIC_PINS.lock().unwrap() = Some(MicPins {
+        left: left_mic,
+        right: right_mic,
+    });
 
     log::info!("connecting to wifi ssid={WIFI_SSID}");
     let sys_loop = EspSystemEventLoop::take().unwrap();
@@ -1001,8 +1048,149 @@ fn handle_command(line: &str, rig: &Arc<Mutex<Rig<'static>>>) -> Option<String> 
             out
         }
 
+        // Raw mic diagnostics. Nothing moves; this only reads.
+        //
+        // Samples both D0 lines for 500ms and reports what it saw: the ISR edge
+        // counters (did an interrupt ever fire?), the level right now, and
+        // whether the level changed at all during the window (is the pin even
+        // wired to something that moves?). Those three together separate "the
+        // interrupt isn't re-arming" from "D0 never transitions" from "D0 idles
+        // high so there's no rising edge to catch".
+        Command::Mic => {
+            let before = edge_seq();
+            let (mut l_lo, mut l_hi, mut r_lo, mut r_hi) = (false, false, false, false);
+            let (mut l_now, mut r_now) = (false, false);
+            {
+                let mut guard = MIC_PINS.lock().unwrap();
+                let pins = guard.as_mut().unwrap();
+                let deadline = Instant::now() + Duration::from_millis(500);
+                while Instant::now() < deadline {
+                    l_now = pins.left.is_high();
+                    r_now = pins.right.is_high();
+                    if l_now { l_hi = true } else { l_lo = true }
+                    if r_now { r_hi = true } else { r_lo = true }
+                    sleep(Duration::from_millis(1));
+                }
+            }
+            let after = edge_seq();
+            let moved = |lo: bool, hi: bool| if lo && hi { "yes" } else { "no" };
+            format!(
+                "mic1(left,gpio4): level={} moved={} edges={} (+{})  \
+                 mic2(right,gpio5): level={} moved={} edges={} (+{})",
+                if l_now { "high" } else { "low" },
+                moved(l_lo, l_hi),
+                after.left,
+                after.left.wrapping_sub(before.left),
+                if r_now { "high" } else { "low" },
+                moved(r_lo, r_hi),
+                after.right,
+                after.right.wrapping_sub(before.right),
+            )
+        }
+
+        // Is the pin actually connected to a driving source?
+        //
+        // Force the internal pull-up, read; force the pull-down, read; restore
+        // floating. A pin wired to an LM393's push-pull D0 is held by the
+        // module and reads the *same* both ways (the module wins against a
+        // ~45k internal pull). A pin with nothing on it follows the pull
+        // exactly -- high then low. That difference tells us whether the mic
+        // is reaching GPIO4/5 at all, which no amount of clapping can.
+        Command::MicPull => {
+            let mut guard = MIC_PINS.lock().unwrap();
+            let pins = guard.as_mut().unwrap();
+            // `PinDriver::set_pull` is private in esp-idf-hal, so go straight to
+            // the IDF call it wraps. Safe: the pin is already configured as an
+            // input by the driver we hold, and we restore the float on the way
+            // out.
+            use esp_idf_svc::sys::{
+                gpio_pull_mode_t_GPIO_FLOATING, gpio_pull_mode_t_GPIO_PULLDOWN_ONLY,
+                gpio_pull_mode_t_GPIO_PULLUP_ONLY, gpio_set_pull_mode,
+            };
+            let mut probe = |p: &mut PinDriver<'static, Input>| -> (bool, bool) {
+                let num = p.pin() as i32;
+                unsafe { gpio_set_pull_mode(num, gpio_pull_mode_t_GPIO_PULLUP_ONLY) };
+                sleep(Duration::from_millis(20));
+                let up = p.is_high();
+                unsafe { gpio_set_pull_mode(num, gpio_pull_mode_t_GPIO_PULLDOWN_ONLY) };
+                sleep(Duration::from_millis(20));
+                let down = p.is_high();
+                unsafe { gpio_set_pull_mode(num, gpio_pull_mode_t_GPIO_FLOATING) };
+                (up, down)
+            };
+            let (l_up, l_down) = probe(pins.left);
+            let (r_up, r_down) = probe(pins.right);
+            let verdict = |up: bool, down: bool| match (up, down) {
+                (true, false) => "FLOATING (follows pull -- nothing driving this pin)",
+                (true, true) => "driven HIGH (module holding it high)",
+                (false, false) => "driven LOW (module holding it low)",
+                (false, true) => "inverted?? (check wiring)",
+            };
+            format!(
+                "mic1(left,gpio4): pull_up={} pull_down={} -> {}  \
+                 mic2(right,gpio5): pull_up={} pull_down={} -> {}",
+                l_up as u8, l_down as u8, verdict(l_up, l_down),
+                r_up as u8, r_down as u8, verdict(r_up, r_down),
+            )
+        }
+
+        // Tight-loop level sampler: 2 seconds, no sleep between reads, so it
+        // catches pulses far shorter than the 1ms `mic` poll could. Reports the
+        // low-going pulse count and the shortest/longest seen, which is what
+        // you watch while turning the KY-038 threshold pot.
+        Command::MicWatch => {
+            let mut guard = MIC_PINS.lock().unwrap();
+            let pins = guard.as_mut().unwrap();
+            let (mut l_pulses, mut r_pulses) = (0u32, 0u32);
+            let (mut l_prev, mut r_prev) = (pins.left.is_high(), pins.right.is_high());
+            let (mut l_min, mut l_max) = (u32::MAX, 0u32);
+            let (mut l_fell_at, mut r_fell_at) = (0u32, 0u32);
+            let (mut r_min, mut r_max) = (u32::MAX, 0u32);
+            let deadline = Instant::now() + Duration::from_millis(2000);
+            while Instant::now() < deadline {
+                let now = now_us();
+                let l = pins.left.is_high();
+                let r = pins.right.is_high();
+                if l != l_prev {
+                    if l {
+                        // rose: close the low pulse
+                        let w = now.wrapping_sub(l_fell_at);
+                        l_min = l_min.min(w);
+                        l_max = l_max.max(w);
+                        l_pulses += 1;
+                    } else {
+                        l_fell_at = now;
+                    }
+                    l_prev = l;
+                }
+                if r != r_prev {
+                    if r {
+                        let w = now.wrapping_sub(r_fell_at);
+                        r_min = r_min.min(w);
+                        r_max = r_max.max(w);
+                        r_pulses += 1;
+                    } else {
+                        r_fell_at = now;
+                    }
+                    r_prev = r;
+                }
+            }
+            let fmt = |n: u32, mn: u32, mx: u32| {
+                if n == 0 {
+                    "none".to_string()
+                } else {
+                    format!("{n} pulses, low for {}..{}us", mn, mx)
+                }
+            };
+            format!(
+                "2s tight sample -- mic1(left,gpio4): {}  mic2(right,gpio5): {}",
+                fmt(l_pulses, l_min, l_max),
+                fmt(r_pulses, r_min, r_max),
+            )
+        }
+
         Command::Help => "commands: state [name]; stop; left|right fwd|rev|stop [duty]; \
-                          alt [ms]; laser on|off|fire; set <key> <val>; get; help"
+                          alt [ms]; laser on|off|fire; set <key> <val>; get; mic; micpull; micwatch; help"
             .into(),
 
         Command::Error(msg) | Command::Unknown(msg) => msg,

@@ -141,6 +141,17 @@ pub enum Command {
     Set { key: SetKey, value: u32 },
     Get,
     Help,
+    /// `mic`: raw mic diagnostics -- live D0 levels and ISR edge counters.
+    /// Read-only and motionless, for working out why a clap isn't heard.
+    Mic,
+    /// `micpull`: drive the internal pull up then down and read the level back.
+    /// A pin connected to an actively-driven D0 barely budges; a floating
+    /// (unconnected) pin follows the pull exactly. Distinguishes "module isn't
+    /// reaching the pin" from "module is quiet".
+    MicPull,
+    /// `micwatch`: 2s tight-loop level sampler. Counts low-going pulses and
+    /// their widths -- the readout to watch while turning the threshold pot.
+    MicWatch,
     /// Recognised shape, bad contents -- the string is the reply to send back.
     Error(String),
     /// Nothing matched.
@@ -213,6 +224,9 @@ pub fn parse_command(line: &str) -> Command {
         }
 
         "get" => Command::Get,
+        "mic" => Command::Mic,
+        "micpull" => Command::MicPull,
+        "micwatch" => Command::MicWatch,
         "help" => Command::Help,
 
         other => Command::Unknown(format!("unknown command '{other}' (try 'help')")),
