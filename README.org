@@ -1041,19 +1041,19 @@ jumper beats adding two components.)
 The old GPIO3 indicator LED is gone -- the laser lives there now. The laser
 *is* the indicator.
 
-| Signal                | ESP32-C3 | Goes to        | Note                        |
-|-----------------------+----------+----------------+-----------------------------|
-| Left speed            | GPIO0    | L298N ENA      |                             |
-| Left dir 1            | GPIO1    | L298N IN1      |                             |
-| Left dir 2            | GPIO10   | L298N IN2      |                             |
-| Right dir 1           | GPIO7    | L298N IN3      |                             |
-| Right dir 2           | GPIO2    | L298N IN4      | *moved off GPIO5*           |
-| Right speed           | GPIO6    | L298N ENB      |                             |
-| Left mic  ("mic1")    | GPIO4    | KY-038 D0      | unchanged                   |
-| Right mic ("mic2")    | GPIO5    | KY-038 D0      | *was the motor's IN4*       |
-| Laser                 | GPIO3    | KY-008 S       | *was the indicator LED*     |
-| Board power           | 5V       | L298N +5V      |                             |
-| Ground                | GND      | L298N GND      |                             |
+| Signal             | ESP32-C3 | Goes to   | Color | Note                    |
+|--------------------+----------+-----------+-------+-------------------------|
+| Left speed         | GPIO0    | L298N ENA | brown |                         |
+| Left dir 1         | GPIO1    | L298N IN1 | black |                         |
+| Left dir 2         | GPIO10   | L298N IN2 | black |                         |
+| Right dir 1        | GPIO7    | L298N IN3 | blue  |                         |
+| Right dir 2        | GPIO2    | L298N IN4 | red   | *moved off GPIO5*       |
+| Right speed        | GPIO6    | L298N ENB | grey  |                         |
+| Left mic  ("mic1") | GPIO4    | KY-038 D0 |       | |
+| Right mic ("mic2") | GPIO5    | KY-038 D0 |       | *was the motor's IN4*   |
+| Laser              | GPIO3    | KY-008 S  |       | *was the indicator LED* |
+| Board power        | 5V       | L298N +5V |       |                         |
+| Ground             | GND      | L298N GND |       |                         |
 
 *Laser wiring:* KY-008 =S= to GPIO3, =+= to 3.3V, =-= to GND. The module has
 its own current limiting, so no transistor. Keep it Class II/IIIa as called out
@@ -1172,12 +1172,30 @@ Tunable keys, with the value each one starts at:
 - =pair_timeout_ms= (50) -- how long to wait for the second mic after the first
   one fires before giving up and reporting on the single mic alone.
 
-*Note on async notifications:* the delta line is pushed to the client from the
-state thread, which needs a second handle on the socket -- and
-=TcpStream::try_clone()= is =dup()=-backed, which lwIP doesn't implement (the
-ENOSYS gotcha from Stage 1). Where the clone fails the firmware logs
-=try_clone unsupported= once and carries on; the deltas then ride back on
-command replies instead of arriving unprompted.
+*State is pushed, not polled.* Every transition writes a line to the connected
+client, so you can just watch the machine run:
+
+#+begin_example
+state armed
+state firing
+delta_us=-87 dir=left
+state turning
+#+end_example
+
+Connecting also greets you with the current state, so a client that joins
+mid-run is never left guessing until the next transition. =state= on demand
+still works.
+
+Getting that working needed a detour around the Stage 1 =dup()= gotcha: the
+state thread pushes from a *different thread* than the one reading commands,
+which normally means a second socket handle -- and =TcpStream::try_clone()= is
+=dup()=-backed, which lwIP doesn't implement. So instead of cloning, the
+connection publishes its *raw fd* and the state thread borrows it (wrapped in
+=ManuallyDrop=, so the borrow never closes the socket out from under the
+reader). Both threads write only whole short lines, which are a single
+sub-buffer-sized =write= each, so they interleave between lines and never
+within one. The reader clears the shared fd before its stream drops, so a push
+can never land on a closed socket.
 
 *** Tests
 

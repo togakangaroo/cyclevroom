@@ -31,7 +31,9 @@
 //! over from `firmware-left-or-right` unchanged.
 
 use std::io::{BufRead, BufReader, Write};
+use std::mem::ManuallyDrop;
 use std::net::{TcpListener, TcpStream};
+use std::os::fd::{AsRawFd, FromRawFd, RawFd};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::sleep;
@@ -397,16 +399,35 @@ fn abortable_sleep(ms: u64) {
     }
 }
 
-/// The client's socket, shared so the state thread can push unsolicited lines
-/// (the tuning delta, state changes) to whoever is connected.
-type Client = Arc<Mutex<Option<TcpStream>>>;
+/// The connected client's socket fd, shared so the state thread can push
+/// unsolicited lines (state changes, the tuning delta) to whoever is connected.
+///
+/// A raw fd rather than a second `TcpStream`, because `TcpStream::try_clone()`
+/// is `dup()`-backed and lwIP doesn't implement it (the ENOSYS gotcha from
+/// Stage 1). Writing to the same fd from two threads is fine here: the reader
+/// thread only ever writes short command replies, this only ever writes short
+/// notification lines, and a line is a single `write` syscall well under the
+/// socket buffer -- so they interleave between lines, never within one.
+///
+/// `None` when nobody is connected, which makes [`notify`] a silent no-op.
+type Client = Arc<Mutex<Option<RawFd>>>;
 
 /// Write a line to the connected client, if any. Best effort -- a dead socket
-/// is dropped on the next read, so failures here are ignored.
+/// is noticed by the reader thread, so failures here are ignored.
+///
+/// The fd is borrowed, never owned: `ManuallyDrop` keeps the `TcpStream`
+/// wrapper from closing the socket out from under the reader thread when it
+/// goes out of scope at the end of this function.
 fn notify(client: &Client, msg: &str) {
-    if let Some(stream) = client.lock().unwrap().as_mut() {
-        let _ = writeln!(stream, "{msg}");
-    }
+    let guard = client.lock().unwrap();
+    let Some(fd) = *guard else {
+        return;
+    };
+    // Safety: `fd` is owned by the live `TcpStream` in `handle_client`, which
+    // clears this slot before dropping it -- so while we hold the lock and see
+    // `Some`, the fd is open. ManuallyDrop prevents a double close.
+    let mut borrowed = ManuallyDrop::new(unsafe { TcpStream::from_raw_fd(fd) });
+    let _ = writeln!(borrowed, "{msg}");
 }
 
 /// Move to `next`, logging and telling the client.
@@ -831,18 +852,15 @@ fn connect_wifi(wifi: &mut BlockingWifi<EspWifi<'static>>) -> anyhow::Result<()>
 /// the moment the first byte arrives). Read through a `BufReader`, write back
 /// through `get_mut()`.
 fn handle_client(stream: TcpStream, rig: &Arc<Mutex<Rig<'static>>>, client: &Client) {
-    // Publish a handle so the state thread can push deltas and state changes.
-    // A second clone is unavailable (see above), so the state thread borrows
-    // this one under the mutex instead.
-    match stream.try_clone() {
-        Ok(w) => *client.lock().unwrap() = Some(w),
-        Err(_) => {
-            // Expected on-device: no dup(). The state thread then can't push
-            // asynchronously, so deltas ride back on the next command reply
-            // instead. Logged once so the behaviour isn't a mystery.
-            log::info!("try_clone unsupported; async notifications disabled");
-        }
-    }
+    // Publish this connection's fd so the state thread can push state changes
+    // and tuning deltas. Not a `try_clone()` -- that's dup()-backed and lwIP
+    // returns ENOSYS -- so both threads share the one fd; see `notify`.
+    *client.lock().unwrap() = Some(stream.as_raw_fd());
+
+    // Greet with where the machine is right now, so the state stream is
+    // self-contained: a client that connects mid-run knows the current state
+    // without having to send `state` or wait for the next transition.
+    notify(client, &format!("state {}", current_state().name()));
 
     let mut reader = BufReader::new(stream);
     loop {
@@ -862,6 +880,8 @@ fn handle_client(stream: TcpStream, rig: &Arc<Mutex<Rig<'static>>>, client: &Cli
         }
     }
 
+    // Clear the shared fd *before* `stream` drops at the end of this function,
+    // so the state thread can never write to a closed socket.
     *client.lock().unwrap() = None;
 
     // A dropped connection must never leave the bot driving blind.
