@@ -105,6 +105,17 @@ static ABORT: AtomicBool = AtomicBool::new(false);
 /// none. `AtomicI32` so "none" is representable without a separate flag.
 static FORCED_STATE: AtomicI32 = AtomicI32::new(-1);
 
+/// Manual (wiring-debug) mode. Set by `left|right ...` and `alt`; holds the
+/// machine in `Paused` with no timeout so the behaviour loop can't resume
+/// and brake or steer the wheels out from under a hand-driven test. Cleared
+/// by `state <name>` (anything but paused) or a dropped connection.
+static MANUAL: AtomicBool = AtomicBool::new(false);
+
+/// True once the `Paused` arm has done its entry `all_off()`. A manual drive
+/// waits for this, otherwise that entry brake could land just after the
+/// drive starts and silently cancel it. Cleared by every `enter()`.
+static PAUSE_SETTLED: AtomicBool = AtomicBool::new(false);
+
 fn snapshot_tunables() -> Tunables {
     Tunables {
         active_idle_ms: ACTIVE_IDLE_MS.load(Ordering::Relaxed),
@@ -472,6 +483,7 @@ fn notify(client: &Client, msg: &str) {
 
 /// Move to `next`, logging and telling the client.
 fn enter(next: State, client: &Client) {
+    PAUSE_SETTLED.store(false, Ordering::Release);
     CURRENT_STATE.store(next as u8, Ordering::Relaxed);
     log::info!("-> {}", next.name());
     notify(client, &format!("state {}", next.name()));
@@ -707,8 +719,10 @@ fn run_state_machine(rig: Arc<Mutex<Rig<'static>>>, client: Client) -> ! {
             // Halted. Sit out the timer, then resume.
             State::Paused => {
                 rig.lock().unwrap().all_off();
+                PAUSE_SETTLED.store(true, Ordering::Release);
                 let deadline = Instant::now() + Duration::from_millis(t.paused_ms as u64);
-                while Instant::now() < deadline {
+                // In manual mode the pause never times out on its own.
+                while MANUAL.load(Ordering::Acquire) || Instant::now() < deadline {
                     if let Some(target) = take_forced() {
                         if let Some(next) = transition(current_state(), Event::Force(target), &t) {
                             enter(next, &client);
@@ -735,6 +749,29 @@ fn run_state_machine(rig: Arc<Mutex<Rig<'static>>>, client: Client) -> ! {
             }
         }
     }
+}
+
+/// Switch to manual mode: park the behaviour loop in `Paused` (indefinitely,
+/// see `MANUAL`) and wait until it has finished its entry brake, so a manual
+/// drive issued right after can't be cancelled by it. Returns false if the
+/// loop didn't settle in time (e.g. stuck mid-laser-pulse); MANUAL stays set,
+/// so a retry a moment later will find it paused.
+fn enter_manual() -> bool {
+    MANUAL.store(true, Ordering::Release);
+    let settled = || current_state() == State::Paused && PAUSE_SETTLED.load(Ordering::Acquire);
+    if settled() {
+        return true;
+    }
+    ABORT.store(true, Ordering::Relaxed);
+    FORCED_STATE.store(State::Paused as u8 as i32, Ordering::Release);
+    let deadline = Instant::now() + Duration::from_millis(3000);
+    while Instant::now() < deadline {
+        if settled() {
+            return true;
+        }
+        sleep(Duration::from_millis(10));
+    }
+    false
 }
 
 /// Take a pending `state <name>` override, if one is queued.
@@ -931,7 +968,9 @@ fn handle_client(stream: TcpStream, rig: &Arc<Mutex<Rig<'static>>>, client: &Cli
     // so the state thread can never write to a closed socket.
     *client.lock().unwrap() = None;
 
-    // A dropped connection must never leave the bot driving blind.
+    // A dropped connection must never leave the bot driving blind. It also
+    // ends manual mode, so the usual pause-then-resume applies.
+    MANUAL.store(false, Ordering::Release);
     ABORT.store(true, Ordering::Relaxed);
     FORCED_STATE.store(State::Paused as u8 as i32, Ordering::Release);
     rig.lock().unwrap().all_off();
@@ -951,8 +990,10 @@ fn handle_command(line: &str, rig: &Arc<Mutex<Rig<'static>>>) -> Option<String> 
             ABORT.store(true, Ordering::Relaxed);
             rig.lock().unwrap().all_off();
             FORCED_STATE.store(target as u8 as i32, Ordering::Release);
-            // Forcing anywhere other than Paused means "carry on from here".
+            // Forcing anywhere other than Paused means "carry on from here",
+            // which is also how you leave manual mode.
             if target != State::Paused {
+                MANUAL.store(false, Ordering::Release);
                 ABORT.store(false, Ordering::Relaxed);
             }
             format!("ok state {}", target.name())
@@ -966,6 +1007,9 @@ fn handle_command(line: &str, rig: &Arc<Mutex<Rig<'static>>>) -> Option<String> 
         }
 
         Command::Drive { wheel, dir, duty } => {
+            if !enter_manual() {
+                return Some("err: state machine didn't pause, try again".into());
+            }
             let duty = duty.unwrap_or(DRIVE_DUTY.load(Ordering::Relaxed));
             let mut rig = rig.lock().unwrap();
             match wheel {
@@ -977,6 +1021,9 @@ fn handle_command(line: &str, rig: &Arc<Mutex<Rig<'static>>>) -> Option<String> 
 
         Command::Alt { ms } => {
             // Wheel-by-wheel wiring check, unchanged in spirit from moving-wifi.
+            if !enter_manual() {
+                return Some("err: state machine didn't pause, try again".into());
+            }
             let rig = Arc::clone(rig);
             ABORT.store(false, Ordering::Relaxed);
             std::thread::spawn(move || {
@@ -1190,7 +1237,8 @@ fn handle_command(line: &str, rig: &Arc<Mutex<Rig<'static>>>) -> Option<String> 
         }
 
         Command::Help => "commands: state [name]; stop; left|right fwd|rev|stop [duty]; \
-                          alt [ms]; laser on|off|fire; set <key> <val>; get; mic; micpull; micwatch; help"
+                          alt [ms]; laser on|off|fire; set <key> <val>; get; mic; micpull; micwatch; help \
+                          (left/right/alt enter manual mode -- 'state listening' resumes)"
             .into(),
 
         Command::Error(msg) | Command::Unknown(msg) => msg,

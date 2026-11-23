@@ -1,3 +1,6 @@
 [toolchain]
-channel = "nightly"
+# Pinned: nightlies from 2026-10-19 on can't build std for espidf (libc 0.2.191
+# dropped newlib's st_*time fields). Unpin once a nightly ships libc >= 0.2.192.
+# https://github.com/rust-lang/rust/issues/164555
+channel = "nightly-2026-10-18"
 components = ["rust-src"]
